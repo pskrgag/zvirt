@@ -65,6 +65,11 @@ pub const Vm = struct {
         if (self.binary) |*binary|
             binary.deinit(self.allocator);
 
+        for (&self.vcpus) |*vcpu| {
+            if (vcpu.*) |*cpu|
+                cpu.deinit();
+        }
+
         posix.munmap(self.memory);
     }
 

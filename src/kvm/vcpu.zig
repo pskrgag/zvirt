@@ -105,6 +105,10 @@ pub const Vcpu = struct {
         };
     }
 
+    pub fn deinit(self: *Self) void {
+        posix.munmap(self.run_mapping);
+    }
+
     pub fn run_once(self: *const Self) !void {
         _ = try ioctl(self.fd, c.KVM_RUN, 0);
     }
