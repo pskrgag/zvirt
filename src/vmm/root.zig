@@ -7,6 +7,8 @@ const builtin = @import("builtin");
 const lazy = @import("utils").Lazy.lazy;
 const test_utils = @import("test_utils");
 
+const memory = @import("memory.zig");
+
 const arch = switch (builtin.cpu.arch) {
     .x86, .x86_64 => @import("arch/x86.zig"),
     else => @compileError("unsupported architecture"),
@@ -17,51 +19,54 @@ var kvm_system = lazy(kvm.Kvm, kvm.Kvm.init);
 
 pub const VmConfig = struct {
     // Memory size (in bytes)
-    memory: usize,
+    ram_size: usize,
+
+    // Main binary
+    binary: []const u8,
+
+    // Arch config
+    arch_cfg: arch.Config = .{},
 };
 
 pub const Vm = struct {
     vm: kvm.Vm,
-    memory: []align(std.heap.page_size_min) u8,
     vcpus: [MAX_VCPUS]?kvm.Vcpu,
     io_bus: arch.io_bus,
     io: std.Io,
     binary: ?std.ArrayList(u8),
     allocator: std.mem.Allocator,
+    config: VmConfig,
+    memory: memory.GuestMemory,
 
     const Self = @This();
 
     pub fn new(config: VmConfig, io: std.Io, allocator: std.mem.Allocator) !Self {
         const system = try kvm_system.get();
         const vm = try system.create_vm();
-        const memory = try posix.mmap(
-            null,
-            config.memory,
-            .{ .READ = true, .WRITE = true },
-            .{ .ANONYMOUS = true, .TYPE = .PRIVATE },
-            -1,
-            0,
-        );
+        var mem = try memory.GuestMemory.new(allocator);
 
-        errdefer posix.munmap(memory);
+        try arch.setup_memory(&mem, config, allocator);
 
-        try vm.set_user_memory_region(0x1000, 0, memory);
+        for (mem.regions.items) |reg| {
+            try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
+        }
 
         var self: Self = .{
             .vm = vm,
-            .memory = memory,
+            .memory = mem,
             .vcpus = .{null} ** MAX_VCPUS,
             .io_bus = arch.io_bus{},
             .io = io,
             .binary = null,
             .allocator = allocator,
+            .config = config,
         };
 
         _ = try self.create_vcpu(0);
         return self;
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
         if (self.binary) |*binary|
             binary.deinit(self.allocator);
 
@@ -70,20 +75,8 @@ pub const Vm = struct {
                 cpu.deinit();
         }
 
-        posix.munmap(self.memory);
-    }
-
-    pub fn load_binary(self: *Self, owned_binary: std.ArrayList(u8)) !void {
-        var binary = owned_binary;
-        errdefer binary.deinit(self.allocator);
-
-        if (self.binary != null)
-            return error.BinaryAlreadyLoaded;
-        if (binary.items.len > self.memory.len)
-            return error.BinaryDoesNotFitInGuestMemory;
-
-        std.mem.copyForwards(u8, self.memory, binary.items);
-        self.binary = binary;
+        self.vm.deinit();
+        self.memory.deinit(alloc);
     }
 
     pub fn create_vcpu(self: *Self, id: usize) !*kvm.Vcpu {
@@ -95,7 +88,7 @@ pub const Vm = struct {
 
         self.vcpus[id] = try self.vm.create_vcpu(id);
         const vcpu = &self.vcpus[id].?;
-        try arch.setup_vcpu(vcpu);
+        try arch.setup_vcpu(vcpu, &self.config.arch_cfg);
 
         return vcpu;
     }
@@ -128,17 +121,19 @@ pub const Vm = struct {
 test "guest port write reaches COM1 UART" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    var vm = try Vm.new(.{ .memory = 0x2000 }, io, allocator);
-    defer vm.deinit();
-
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
         "test_bins/port_write.bin",
         allocator,
         .unlimited,
     );
-    const binary = std.ArrayList(u8).fromOwnedSlice(binary_bytes);
-    try vm.load_binary(binary);
+    defer allocator.free(binary_bytes);
+    var vm = try Vm.new(.{
+        .ram_size = 0x20000,
+        .arch_cfg = .{ .mode = .Real },
+        .binary = binary_bytes,
+    }, io, allocator);
+    defer vm.deinit(allocator);
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();

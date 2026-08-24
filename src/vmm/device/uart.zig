@@ -9,9 +9,7 @@ pub const Uart = struct {
 
     const Self = @This();
 
-    pub fn write_byte(self: *Self, byte: u8, io: Io) !void {
-        const bytes = [_]u8{byte};
-
-        try self.file.writeStreamingAll(io, &bytes);
+    pub fn write_bytes(self: *Self, data: []const u8, io: Io) !void {
+        try self.file.writeStreamingAll(io, data);
     }
 };

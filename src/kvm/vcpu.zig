@@ -6,6 +6,7 @@ const c = @cImport({
 
 const std = @import("std");
 const posix = std.posix;
+const linux = std.os.linux;
 const ioctl = @import("ioctl.zig").ioctl;
 
 pub const Regs = c.kvm_regs;
@@ -107,6 +108,9 @@ pub const Vcpu = struct {
 
     pub fn deinit(self: *Self) void {
         posix.munmap(self.run_mapping);
+
+        const res = linux.close(@intCast(self.fd));
+        std.debug.assert(res == 0);
     }
 
     pub fn run_once(self: *const Self) !void {

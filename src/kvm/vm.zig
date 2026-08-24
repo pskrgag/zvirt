@@ -6,6 +6,7 @@ const c = @cImport({
 
 const std = @import("std");
 const posix = std.posix;
+const linux = std.os.linux;
 const Vcpu = @import("vcpu.zig").Vcpu;
 const ioctl = @import("ioctl.zig").ioctl;
 
@@ -42,5 +43,11 @@ pub const Vm = struct {
         const fd = try ioctl(self.fd, c.KVM_CREATE_VCPU, id);
 
         return Vcpu.init(@intCast(fd), self.vcpu_mmap_size, id);
+    }
+
+    pub fn deinit(self: *Self) void {
+        const res = linux.close(self.fd);
+
+        std.debug.assert(res == 0);
     }
 };
