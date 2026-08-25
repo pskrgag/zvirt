@@ -1,8 +1,6 @@
 //! Raw KVM vCPU descriptor wrapper.
 
-const c = @cImport({
-    @cInclude("linux/kvm.h");
-});
+const c = @import("abi.zig").c;
 
 const std = @import("std");
 const posix = std.posix;
@@ -11,6 +9,8 @@ const ioctl = @import("ioctl.zig").ioctl;
 
 pub const Regs = c.kvm_regs;
 pub const Sregs = c.kvm_sregs;
+pub const Sregs2 = c.kvm_sregs2;
+pub const Segment = c.kvm_segment;
 
 pub const ExitReasonRaw = enum(usize) {
     Halt = c.KVM_EXIT_HLT,
@@ -77,11 +77,23 @@ pub const Vcpu = struct {
         return sregs;
     }
 
+    pub fn get_sregs2(self: *const Self) !Sregs2 {
+        var sregs: Sregs2 = undefined;
+
+        _ = try ioctl(self.fd, c.KVM_GET_SREGS2, @intFromPtr(&sregs));
+        return sregs;
+    }
+
+    pub fn set_sregs2(self: *const Self, sregs: *const Sregs2) !void {
+        _ = try ioctl(self.fd, c.KVM_SET_SREGS2, @intFromPtr(sregs));
+    }
+
     pub fn set_sregs(self: *const Self, sregs: *const Sregs) !void {
         _ = try ioctl(self.fd, c.KVM_SET_SREGS, @intFromPtr(sregs));
     }
 
     pub fn exit_reason(self: *const Self) !ExitReason {
+        std.debug.print("exit reason {}\n", .{self.run.exit_reason});
         const raw = try (std.enums.fromInt(
             ExitReasonRaw,
             self.run.exit_reason,

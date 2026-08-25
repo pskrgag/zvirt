@@ -1,8 +1,6 @@
 //! Raw KVM virtual-machine descriptor wrapper.
 
-const c = @cImport({
-    @cInclude("linux/kvm.h");
-});
+const c = @import("abi.zig").c;
 
 const std = @import("std");
 const posix = std.posix;

@@ -21,7 +21,7 @@ pub const MemoryRegion = struct {
         const offset = addr - self.gpa;
         const can_write = @min(self.raw.len - offset, data.len);
 
-        @memcpy(self.raw[offset..offset + can_write], data[0..can_write]);
+        @memcpy(self.raw[offset .. offset + can_write], data[0..can_write]);
         return can_write;
     }
 };
@@ -39,7 +39,7 @@ pub const GuestMemory = struct {
         };
     }
 
-    pub fn allocate(self: *Self, gpa: GuestPhysicalAddress, mem: []u8, alloc: Allocator) !void {
+    pub fn add(self: *Self, gpa: GuestPhysicalAddress, mem: []u8, alloc: Allocator) !void {
         const new_slot = self.slot;
 
         try self.regions.append(alloc, .{ .gpa = gpa, .slot = new_slot, .raw = mem });
@@ -51,15 +51,14 @@ pub const GuestMemory = struct {
     }
 
     pub fn write(self: *Self, gpa: GuestPhysicalAddress, data: []const u8) !void {
-        var written: usize = 0;
         var current_gpa = gpa;
         var current_slice = data;
 
         for (self.regions.items) |*reg| {
-            written += reg.write(current_gpa, current_slice) orelse 0;
+            const len = reg.write(current_gpa, current_slice) orelse 0;
 
-            current_gpa += written;
-            current_slice = current_slice[written..current_slice.len];
+            current_gpa += len;
+            current_slice = current_slice[len..current_slice.len];
         }
 
         if (current_slice.len != 0)

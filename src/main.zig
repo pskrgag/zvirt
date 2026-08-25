@@ -65,11 +65,10 @@ fn run() !void {
         allocator,
         .unlimited,
     );
-    const kernel = std.ArrayList(u8).fromOwnedSlice(kernel_bytes);
+    defer allocator.free(kernel_bytes);
 
-    var vm = try Vm.new(.{ .memory = memory_size }, io, allocator);
-    defer vm.deinit();
+    var vm = try Vm.new(.{ .ram_size = memory_size, .binary = kernel_bytes }, io, allocator);
+    defer vm.deinit(allocator);
 
-    try vm.load_binary(kernel);
     try vm.run();
 }

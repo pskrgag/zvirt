@@ -1,8 +1,6 @@
 //! Raw wrappers around the Linux KVM API.
 
-const c = @cImport({
-    @cInclude("linux/kvm.h");
-});
+const c = @import("abi.zig").c;
 
 const std = @import("std");
 const posix = std.posix;
@@ -10,6 +8,7 @@ const ioctl = @import("ioctl.zig").ioctl;
 
 pub const Vm = @import("vm.zig").Vm;
 pub const Vcpu = @import("vcpu.zig").Vcpu;
+pub const Segment = @import("vcpu.zig").Segment;
 
 const KVM_EXPECTED_API_VERSION = 12;
 

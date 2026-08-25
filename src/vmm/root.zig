@@ -88,7 +88,7 @@ pub const Vm = struct {
 
         self.vcpus[id] = try self.vm.create_vcpu(id);
         const vcpu = &self.vcpus[id].?;
-        try arch.setup_vcpu(vcpu, &self.config.arch_cfg);
+        try arch.setup_vcpu(vcpu);
 
         return vcpu;
     }
@@ -123,14 +123,13 @@ test "guest port write reaches COM1 UART" {
     const allocator = std.testing.allocator;
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
-        "test_bins/port_write.bin",
+        "test_bins/64bit_guest.bin",
         allocator,
         .unlimited,
     );
     defer allocator.free(binary_bytes);
     var vm = try Vm.new(.{
         .ram_size = 0x20000,
-        .arch_cfg = .{ .mode = .Real },
         .binary = binary_bytes,
     }, io, allocator);
     defer vm.deinit(allocator);
