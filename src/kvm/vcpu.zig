@@ -15,6 +15,7 @@ pub const Segment = c.kvm_segment;
 pub const ExitReasonRaw = enum(usize) {
     Halt = c.KVM_EXIT_HLT,
     Io = c.KVM_EXIT_IO,
+    Mmio = c.KVM_EXIT_MMIO,
 };
 
 pub const IoDirection = enum(u8) {
@@ -30,6 +31,18 @@ pub const ExitReason = union(ExitReasonRaw) {
         port: u16,
         count: u32,
         data: *u8,
+    },
+    Mmio: struct {
+        pa: u64,
+        data: u64,
+        write: bool,
+    },
+};
+
+pub const IoResult = union(enum) {
+    Io: void,
+    Mmio: struct {
+        data: u64,
     },
 };
 
@@ -93,7 +106,7 @@ pub const Vcpu = struct {
     }
 
     pub fn exit_reason(self: *const Self) !ExitReason {
-        std.debug.print("exit reason {}\n", .{self.run.exit_reason});
+        // std.debug.print("exit reason {}\n", .{self.run.exit_reason});
         const raw = try (std.enums.fromInt(
             ExitReasonRaw,
             self.run.exit_reason,
@@ -115,6 +128,11 @@ pub const Vcpu = struct {
                     .count = self.run.unnamed_0.io.count,
                 } };
             },
+            .Mmio => .{ .Mmio = .{
+                .data = @bitCast(self.run.unnamed_0.mmio.data),
+                .write = self.run.unnamed_0.mmio.is_write == 1,
+                .pa = self.run.unnamed_0.mmio.phys_addr,
+            } },
         };
     }
 
@@ -125,7 +143,18 @@ pub const Vcpu = struct {
         std.debug.assert(res == 0);
     }
 
-    pub fn run_once(self: *const Self) !void {
+    pub fn run_once(self: *const Self, result: ?IoResult) !void {
+        if (result) |res| {
+            switch (res) {
+                .Io => |io| {
+                    _ = io;
+                },
+                .Mmio => |mmio| {
+                    self.run.unnamed_0.mmio.data = @bitCast(mmio.data);
+                },
+            }
+        }
+
         _ = try ioctl(self.fd, c.KVM_RUN, 0);
     }
 };

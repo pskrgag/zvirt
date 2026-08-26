@@ -6,11 +6,13 @@ const posix = std.posix;
 const builtin = @import("builtin");
 const lazy = @import("utils").Lazy.lazy;
 const test_utils = @import("test_utils");
+const image = @import("image/root.zig");
+pub const IoResult = kvm.IoResult;
 
 const memory = @import("memory.zig");
 
 const arch = switch (builtin.cpu.arch) {
-    .x86, .x86_64 => @import("arch/x86.zig"),
+    .x86, .x86_64 => @import("arch/x86/root.zig"),
     else => @compileError("unsupported architecture"),
 };
 
@@ -32,6 +34,7 @@ pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?kvm.Vcpu,
     io_bus: arch.io_bus,
+    mmio_bus: arch.mmio_bus,
     io: std.Io,
     binary: ?std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -45,7 +48,8 @@ pub const Vm = struct {
         const vm = try system.create_vm();
         var mem = try memory.GuestMemory.new(allocator);
 
-        try arch.setup_memory(&mem, config, allocator);
+        try arch.setup_memory(&mem, &config, allocator);
+        const img = try image.parse(config.binary, &mem, &config);
 
         for (mem.regions.items) |reg| {
             try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
@@ -56,13 +60,14 @@ pub const Vm = struct {
             .memory = mem,
             .vcpus = .{null} ** MAX_VCPUS,
             .io_bus = arch.io_bus{},
+            .mmio_bus = arch.mmio_bus{},
             .io = io,
             .binary = null,
             .allocator = allocator,
             .config = config,
         };
 
-        _ = try self.create_vcpu(0);
+        _ = try self.create_vcpu(img.ep, 0);
         return self;
     }
 
@@ -79,7 +84,7 @@ pub const Vm = struct {
         self.memory.deinit(alloc);
     }
 
-    pub fn create_vcpu(self: *Self, id: usize) !*kvm.Vcpu {
+    pub fn create_vcpu(self: *Self, ep: u64, id: usize) !*kvm.Vcpu {
         if (id >= MAX_VCPUS)
             return error.InvalidVcpuIndex;
 
@@ -88,7 +93,7 @@ pub const Vm = struct {
 
         self.vcpus[id] = try self.vm.create_vcpu(id);
         const vcpu = &self.vcpus[id].?;
-        try arch.setup_vcpu(vcpu);
+        try arch.setup_vcpu(vcpu, ep);
 
         return vcpu;
     }
@@ -99,19 +104,24 @@ pub const Vm = struct {
         else
             return error.BootVcpuMissing;
 
+        var result: ?IoResult = null;
+
         while (true) {
-            try boot_vcpu.run_once();
+            try boot_vcpu.run_once(result);
 
             const exit = try boot_vcpu.exit_reason();
             // std.debug.print("exit reason {any}\n", .{exit});
 
             switch (exit) {
                 .Io => |io_req| {
-                    try self.io_bus.handle_io(io_req, self.io);
+                    result = try self.io_bus.handle_io(io_req, self.io);
                 },
                 .Halt => {
                     std.debug.print("VM halts\n", .{});
                     return;
+                },
+                .Mmio => |mmio| {
+                    result = try self.mmio_bus.handle_mmio(mmio, self.io);
                 },
             }
         }
@@ -142,4 +152,8 @@ test "guest port write reaches COM1 UART" {
 
     var captured: [16]u8 = undefined;
     try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
+}
+
+test {
+    _ = @import("image/root.zig");
 }

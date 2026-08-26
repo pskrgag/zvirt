@@ -1,10 +1,11 @@
-//! GDT helpers
+//! x86 GDT helpers
 
 const std = @import("std");
 const kvm = @import("kvm");
 
-pub const GDT_CODE_INDEX = 1;
-pub const GDT_DATA_INDEX = 2;
+// As per linux requirements
+pub const GDT_CODE_INDEX = 2;
+pub const GDT_DATA_INDEX = 3;
 
 pub fn selector(index: u16) u16 {
     // Keep RPL (privilage level) and TI (table id) as 0
@@ -15,7 +16,7 @@ pub fn setup_segment(seg: *kvm.Segment, code: bool, index: u16) void {
     // Unused
     seg.base = 0x0;
     // Maximum
-    seg.limit = 0xFFFF;
+    seg.limit = 0xFFFFF;
 
     // Set long mode
     seg.l = @intFromBool(code);
@@ -46,12 +47,12 @@ const GdtEntry = packed struct(u64) {
 };
 
 pub const Gdt = struct {
-    entries: [3]GdtEntry,
+    entries: [4]GdtEntry,
 };
 
 comptime {
     std.debug.assert(@sizeOf(GdtEntry) == 8);
-    std.debug.assert(@sizeOf(Gdt) == 24);
+    std.debug.assert(@sizeOf(Gdt) == 32);
 }
 
 // Present | S | RW
@@ -73,6 +74,7 @@ fn gdt_entry(code: bool) GdtEntry {
 
 pub fn gdt() Gdt {
     return .{ .entries = [_]GdtEntry{
+        @bitCast(@as(u64, 0)),
         @bitCast(@as(u64, 0)),
         gdt_entry(true),
         gdt_entry(false),

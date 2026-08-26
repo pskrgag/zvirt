@@ -9,6 +9,7 @@ const ioctl = @import("ioctl.zig").ioctl;
 pub const Vm = @import("vm.zig").Vm;
 pub const Vcpu = @import("vcpu.zig").Vcpu;
 pub const Segment = @import("vcpu.zig").Segment;
+pub const IoResult = @import("vcpu.zig").IoResult;
 
 const KVM_EXPECTED_API_VERSION = 12;
 
@@ -38,6 +39,6 @@ pub const Kvm = struct {
     pub fn create_vm(self: *const Self) !Vm {
         const rc = try ioctl(self.fd, c.KVM_CREATE_VM, 0);
 
-        return Vm.init(@intCast(rc), self.vcpu_mmap_size);
+        return Vm.init(@intCast(rc), self.fd, self.vcpu_mmap_size);
     }
 };

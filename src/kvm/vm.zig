@@ -7,17 +7,23 @@ const posix = std.posix;
 const linux = std.os.linux;
 const Vcpu = @import("vcpu.zig").Vcpu;
 const ioctl = @import("ioctl.zig").ioctl;
+const cpuid = @import("cpuid.zig");
 
 pub const GuestPhysicalAddress = u64;
 
 pub const Vm = struct {
     fd: posix.fd_t,
+    kvm_fd: posix.fd_t,
     vcpu_mmap_size: usize,
 
     const Self = @This();
 
-    pub fn init(fd: posix.fd_t, vcpu_mmap_size: usize) Self {
-        return .{ .fd = fd, .vcpu_mmap_size = vcpu_mmap_size };
+    pub fn init(fd: posix.fd_t, kvm_fd: posix.fd_t, vcpu_mmap_size: usize) Self {
+        return .{
+            .fd = fd,
+            .kvm_fd = kvm_fd,
+            .vcpu_mmap_size = vcpu_mmap_size,
+        };
     }
 
     pub fn set_user_memory_region(
@@ -39,8 +45,11 @@ pub const Vm = struct {
 
     pub fn create_vcpu(self: *const Self, id: usize) !Vcpu {
         const fd = try ioctl(self.fd, c.KVM_CREATE_VCPU, id);
+        var vcpu = try Vcpu.init(@intCast(fd), self.vcpu_mmap_size, id);
+        errdefer vcpu.deinit();
 
-        return Vcpu.init(@intCast(fd), self.vcpu_mmap_size, id);
+        try cpuid.configure(self.kvm_fd, vcpu.fd);
+        return vcpu;
     }
 
     pub fn deinit(self: *Self) void {

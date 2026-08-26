@@ -2,14 +2,14 @@
 
 const std = @import("std");
 const kvm = @import("kvm");
-const GuestMemory = @import("../memory.zig").GuestMemory;
-const VmConfig = @import("../root.zig").VmConfig;
+const GuestMemory = @import("../../memory.zig").GuestMemory;
+const VmConfig = @import("../../root.zig").VmConfig;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const gdt = @import("gdt.zig");
 const paging = @import("paging.zig");
 
-const DEFAULT_LOAD_ADDRESS = 0x00100000;
+pub const layout = @import("layout.zig");
 
 // Long-mode enable
 const EFER_LME = 1 << 8;
@@ -26,22 +26,12 @@ const CR0_PE = 1 << 0;
 // Enable paging
 const CR4_PAE = 1 << 5;
 
-const GDT_ADDR = 0x4000;
-
 pub const io_bus = @import("io_bus.zig");
+pub const mmio_bus = @import("mmio_bus.zig");
 
 pub const Config = struct {};
 
-const MemorySlot = struct {
-    start: u64,
-    length: u64,
-    kind: enum {
-        Ram,
-        Reserved,
-    },
-};
-
-pub fn setup_vcpu(vcpu: *kvm.Vcpu) !void {
+pub fn setup_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
     {
         var sregs = try vcpu.get_sregs();
 
@@ -63,7 +53,7 @@ pub fn setup_vcpu(vcpu: *kvm.Vcpu) !void {
         sregs.cr4 = CR4_PAE;
 
         // Enable physical address extension
-        sregs.cr3 = paging.PGD_ADDR;
+        sregs.cr3 = layout.PGD_ADDR;
 
         try vcpu.set_sregs(&sregs);
     }
@@ -71,25 +61,20 @@ pub fn setup_vcpu(vcpu: *kvm.Vcpu) !void {
     {
         var sregs = try vcpu.get_sregs2();
 
-        sregs.gdt.base = GDT_ADDR;
-        sregs.gdt.limit = 23;
+        sregs.gdt.base = layout.GDT_ADDR;
+        sregs.gdt.limit = 31;
 
         try vcpu.set_sregs2(&sregs);
     }
 
     var regs = try vcpu.get_regs();
-    regs.rip = DEFAULT_LOAD_ADDRESS;
+    regs.rip = ep;
+    regs.rsi = layout.BOOT_PARAM_ADDR;
     try vcpu.set_regs(&regs);
 }
 
-pub fn setup_memory(memory: *GuestMemory, config: VmConfig, alloc: Allocator) !void {
-    const memory_layout = [_]MemorySlot{
-        MemorySlot{ .start = 0x00000000, .length = 0x000A0000, .kind = .Ram },
-        MemorySlot{ .start = 0x000A0000, .length = 0x00060000, .kind = .Reserved },
-        MemorySlot{ .start = 0x00100000, .length = config.ram_size, .kind = .Ram },
-    };
-
-    for (memory_layout) |entry| {
+pub fn setup_memory(memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
+    for (layout.memory_layout(config)) |entry| {
         if (entry.kind == .Ram) {
             const ram = try posix.mmap(
                 null,
@@ -104,10 +89,8 @@ pub fn setup_memory(memory: *GuestMemory, config: VmConfig, alloc: Allocator) !v
         }
     }
 
-    try memory.write(paging.PGD_ADDR, std.mem.asBytes(&paging.PGD));
-    try memory.write(paging.PUD_ADDR, std.mem.asBytes(&paging.PUD));
-    try memory.write(paging.PMD_ADDR, std.mem.asBytes(&paging.PMD));
-
-    try memory.write(GDT_ADDR, std.mem.asBytes(&gdt.gdt()));
-    try memory.write(DEFAULT_LOAD_ADDRESS, config.binary);
+    try memory.write(layout.PGD_ADDR, std.mem.asBytes(&paging.PGD));
+    try memory.write(layout.PUD_ADDR, std.mem.asBytes(&paging.PUD));
+    try memory.write(layout.PMD_ADDR, std.mem.asBytes(&paging.PMD));
+    try memory.write(layout.GDT_ADDR, std.mem.asBytes(&gdt.gdt()));
 }
