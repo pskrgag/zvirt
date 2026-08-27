@@ -11,7 +11,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     _ = self;
     _ = io;
 
-    // std.debug.print("trying {}\n", .{mmio_request.pa});
+    // std.debug.print("trying {any}\n", .{mmio_request});
     switch (mmio_request.pa) {
         0xa0000...0xbffff,
         0xc0000...0xfffff,

@@ -43,6 +43,16 @@ pub const Vm = struct {
         _ = try ioctl(self.fd, c.KVM_SET_USER_MEMORY_REGION, @intFromPtr(&region));
     }
 
+    pub fn create_pit(self: *const Self) !void {
+        const config = c.kvm_pit_config{};
+
+        _ = try ioctl(self.fd, c.KVM_CREATE_PIT2, @intFromPtr(&config));
+    }
+
+    pub fn create_irqchip(self: *const Self) !void {
+        _ = try ioctl(self.fd, c.KVM_CREATE_IRQCHIP, 0);
+    }
+
     pub fn create_vcpu(self: *const Self, id: usize) !Vcpu {
         const fd = try ioctl(self.fd, c.KVM_CREATE_VCPU, id);
         var vcpu = try Vcpu.init(@intCast(fd), self.vcpu_mmap_size, id);

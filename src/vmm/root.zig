@@ -45,7 +45,7 @@ pub const Vm = struct {
 
     pub fn new(config: VmConfig, io: std.Io, allocator: std.mem.Allocator) !Self {
         const system = try kvm_system.get();
-        const vm = try system.create_vm();
+        var vm = try system.create_vm();
         var mem = try memory.GuestMemory.new(allocator);
 
         try arch.setup_memory(&mem, &config, allocator);
@@ -54,6 +54,9 @@ pub const Vm = struct {
         for (mem.regions.items) |reg| {
             try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
         }
+
+        try vm.create_irqchip();
+        try arch.setup_vm(&vm);
 
         var self: Self = .{
             .vm = vm,

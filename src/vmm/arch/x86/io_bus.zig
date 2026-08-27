@@ -7,11 +7,12 @@ const IoResult = @import("kvm").IoResult;
 
 const Self = @This();
 
-com1: device.uart.Uart = .{
+com1: device.uart_16550.Uart = .{
     .file = std.Io.File.stdout(),
 },
 
 config_address: u32 = 0,
+cmos: device.cmos.Cmos = .{},
 
 pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
@@ -23,30 +24,63 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
 
     return switch (io_request.port) {
         // UART (COM1)
-        0x3f8 => {
+        0x3f8...0x3ff => {
+            if (io_request.size != 1)
+                return error.InvalidWrite;
+
             if (io_request.dir == .Out) {
-                try self.com1.write_bytes(data, io);
-                return null;
+                try self.com1.write_reg(
+                    std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
+                    data[0],
+                    io,
+                );
             } else {
-                @panic("todo");
+                const res = try self.com1.read_reg(
+                    std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
+                    io,
+                );
+
+                std.mem.writeInt(u8, data_ptr[0..1], res, .little);
             }
+
+            return null;
         },
-        0x3f9 => {
+        // No COM{2,4}
+        0x2f8...0x2ff, 0x3e8...0x3ef, 0x2e8...0x2ef => {
+            if (io_request.size != 1)
+                return error.InvalidWrite;
+
+            if (io_request.dir == .Out)
+                std.mem.writeInt(u8, data_ptr[0..1], 0xff, .little);
+
+            return null;
+        },
+
+        0x70...0x71 => {
+            if (io_request.size != 1)
+                return error.InvalidWrite;
+
             if (io_request.dir == .Out) {
-                return null;
+                try self.cmos.write_reg(
+                    std.enums.fromInt(device.cmos.Register, io_request.port - 0x70).?,
+                    data[0],
+                );
             } else {
-                return null;
+                const res = self.cmos.read_reg(
+                    std.enums.fromInt(device.cmos.Register, io_request.port - 0x70).?,
+                );
+
+                std.mem.writeInt(u8, data_ptr[0..1], res, .little);
             }
+
+            return null;
         },
-        0x3fd => {
-            if (io_request.dir == .In and io_request.size == 1) {
-                std.mem.writeInt(u16, data_ptr[0..2], 0x20 | 0x40, .little);
-                return null;
-            } else {
-                std.debug.print("{any}\n", .{io_request});
-                @panic("todo");
-            }
+
+        // DMA: todo
+        0x87 => {
+            return null;
         },
+
         // PCI (which we don't support yet)
         0xcf8 => {
             if (io_request.dir == .Out and io_request.size == 4) {
@@ -65,7 +99,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
             }
         },
         else => {
-            std.debug.print("Unknown port {}\n", .{io_request.port});
+            std.debug.print("Unknown port {any}\n", .{io_request});
             return error.UnknowPort;
         },
     };

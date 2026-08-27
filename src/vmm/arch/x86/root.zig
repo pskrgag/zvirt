@@ -73,6 +73,10 @@ pub fn setup_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
     try vcpu.set_regs(&regs);
 }
 
+pub fn setup_vm(vm: *kvm.Vm) !void {
+    try vm.create_pit();
+}
+
 pub fn setup_memory(memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
     for (layout.memory_layout(config)) |entry| {
         if (entry.kind == .Ram) {
