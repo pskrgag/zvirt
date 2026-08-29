@@ -8,6 +8,7 @@ const DEFAULT_MEMORY_SIZE = 1 << 30;
 var config = struct {
     kernel: []const u8 = "",
     memory: []const u8 = "",
+    initramfs: []const u8 = "",
     io: ?std.Io = null,
     allocator: ?std.mem.Allocator = null,
 }{};
@@ -33,6 +34,10 @@ pub fn main(init: std.process.Init) !void {
                 .long_name = "memory",
                 .help = "Memory size",
                 .value_ref = runner.mkRef(&config.memory),
+            }, .{
+                .long_name = "initramfs",
+                .help = "initramfs image",
+                .value_ref = runner.mkRef(&config.initramfs),
             } }),
             .target = .{ .action = .{ .exec = run } },
         },
@@ -66,8 +71,27 @@ fn run() !void {
         .unlimited,
     );
     defer allocator.free(kernel_bytes);
+    var initramfs: ?[]const u8 = null;
 
-    var vm = try Vm.new(.{ .ram_size = memory_size, .binary = kernel_bytes }, io, allocator);
+    if (config.initramfs.len != 0) {
+        initramfs = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            config.initramfs,
+            allocator,
+            .unlimited,
+        );
+    }
+
+    defer {
+        if (initramfs) |data|
+            allocator.free(data);
+    }
+
+    var vm = try Vm.new(.{
+        .ram_size = memory_size,
+        .binary = kernel_bytes,
+        .initramfs = initramfs,
+    }, io, allocator);
     defer vm.deinit(allocator);
 
     try vm.run();

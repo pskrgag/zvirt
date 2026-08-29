@@ -4,6 +4,7 @@ const std = @import("std");
 const device = @import("../../device/root.zig");
 const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
+const Vm = @import("../../root.zig").Vm;
 
 const Self = @This();
 
@@ -14,7 +15,7 @@ com1: device.uart_16550.Uart = .{
 config_address: u32 = 0,
 cmos: device.cmos.Cmos = .{},
 
-pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
+pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !?IoResult {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
     const data_len =
         @as(usize, io_request.size) *
@@ -32,11 +33,13 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
                 try self.com1.write_reg(
                     std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
                     data[0],
+                    vm,
                     io,
                 );
             } else {
                 const res = try self.com1.read_reg(
                     std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
+                    vm,
                     io,
                 );
 
@@ -45,8 +48,8 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
 
             return null;
         },
-        // No COM{2,4}
-        0x2f8...0x2ff, 0x3e8...0x3ef, 0x2e8...0x2ef => {
+        // No COM{2,4}, no floppy, no POST diagnostics
+        0x2f8...0x2ff, 0x3e8...0x3ef, 0x2e8...0x2ef, 0x3F0...0x3F7, 0x80 => {
             if (io_request.size != 1)
                 return error.InvalidWrite;
 
@@ -55,7 +58,6 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
 
             return null;
         },
-
         0x70...0x71 => {
             if (io_request.size != 1)
                 return error.InvalidWrite;
@@ -93,10 +95,9 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !?IoResult {
         0xcfc...0xcff => {
             if (io_request.dir == .In) {
                 std.mem.writeInt(u32, data_ptr[0..4], 0xFFFFFFFF, .little);
-                return .Io;
-            } else {
-                return null;
             }
+
+            return null;
         },
         else => {
             std.debug.print("Unknown port {any}\n", .{io_request});

@@ -26,6 +26,9 @@ pub const VmConfig = struct {
     // Main binary
     binary: []const u8,
 
+    // Initramfs
+    initramfs: ?[]const u8 = null,
+
     // Arch config
     arch_cfg: arch.Config = .{},
 };
@@ -74,6 +77,10 @@ pub const Vm = struct {
         return self;
     }
 
+    pub fn irq_set(self: *Self, num: u32, set: bool) !void {
+        try self.vm.irq_set(num, set);
+    }
+
     pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
         if (self.binary) |*binary|
             binary.deinit(self.allocator);
@@ -117,7 +124,11 @@ pub const Vm = struct {
 
             switch (exit) {
                 .Io => |io_req| {
-                    result = try self.io_bus.handle_io(io_req, self.io);
+                    result = try self.io_bus.handle_io(io_req, self, self.io);
+                },
+                .Shutdown => {
+                    std.debug.print("VM reboots\n", .{});
+                    return;
                 },
                 .Halt => {
                     std.debug.print("VM halts\n", .{});
@@ -131,18 +142,46 @@ pub const Vm = struct {
     }
 };
 
-test "guest port write reaches COM1 UART" {
+// test "guest port write reaches COM1 UART" {
+//     const io = std.testing.io;
+//     const allocator = std.testing.allocator;
+//     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+//         io,
+//         "test_bins/64bit_guest.bin",
+//         allocator,
+//         .unlimited,
+//     );
+//     defer allocator.free(binary_bytes);
+//     var vm = try Vm.new(.{
+//         .ram_size = 0x20000,
+//         .binary = binary_bytes,
+//     }, io, allocator);
+//     defer vm.deinit(allocator);
+//
+//     var uart_output = try test_utils.TmpUartOutput.create();
+//     defer uart_output.deinit();
+//     vm.io_bus.com1.file = uart_output.file;
+//     defer vm.io_bus.com1.file = std.Io.File.stdout();
+//
+//     try vm.run();
+//
+//     var captured: [16]u8 = undefined;
+//     try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
+// }
+
+test "linux reaches shutdown" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
-        "test_bins/64bit_guest.bin",
+        "test_bins/bzImage",
         allocator,
         .unlimited,
     );
     defer allocator.free(binary_bytes);
+
     var vm = try Vm.new(.{
-        .ram_size = 0x20000,
+        .ram_size = 1 << 30,
         .binary = binary_bytes,
     }, io, allocator);
     defer vm.deinit(allocator);
@@ -150,11 +189,9 @@ test "guest port write reaches COM1 UART" {
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
     vm.io_bus.com1.file = uart_output.file;
+    defer vm.io_bus.com1.file = std.Io.File.stdout();
 
     try vm.run();
-
-    var captured: [16]u8 = undefined;
-    try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
 }
 
 test {

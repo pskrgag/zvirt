@@ -13,6 +13,9 @@ pub const DEFAULT_LOAD_ADDRESS = 0x100000;
 const E820_RAM = 1;
 const E820_RESERVED = 2;
 
+pub const LOW_RAM_BEGIN = 0x0;
+pub const HIGH_RAM_BEGIN = 0x00100000;
+
 pub const MemorySlot = struct {
     start: u64,
     length: u64,
@@ -24,8 +27,8 @@ pub const MemorySlot = struct {
 
 pub fn memory_layout(config: *const VmConfig) [3]MemorySlot {
     return [3]MemorySlot{
-        MemorySlot{ .start = 0x00000000, .length = 0x000A0000, .kind = .Ram },
+        MemorySlot{ .start = LOW_RAM_BEGIN, .length = 0x000A0000, .kind = .Ram },
         MemorySlot{ .start = 0x000A0000, .length = 0x00060000, .kind = .Reserved },
-        MemorySlot{ .start = 0x00100000, .length = config.ram_size, .kind = .Ram },
+        MemorySlot{ .start = HIGH_RAM_BEGIN, .length = config.ram_size, .kind = .Ram },
     };
 }

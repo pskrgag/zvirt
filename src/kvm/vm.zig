@@ -49,6 +49,15 @@ pub const Vm = struct {
         _ = try ioctl(self.fd, c.KVM_CREATE_PIT2, @intFromPtr(&config));
     }
 
+    pub fn irq_set(self: *const Self, num: u32, set: bool) !void {
+        var irq = c.kvm_irq_level{
+            .unnamed_0 = .{ .irq = num },
+            .level = @intFromBool(set),
+        };
+
+        _ = try ioctl(self.fd, c.KVM_IRQ_LINE, @intFromPtr(&irq));
+    }
+
     pub fn create_irqchip(self: *const Self) !void {
         _ = try ioctl(self.fd, c.KVM_CREATE_IRQCHIP, 0);
     }

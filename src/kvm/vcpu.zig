@@ -16,6 +16,7 @@ pub const ExitReasonRaw = enum(usize) {
     Halt = c.KVM_EXIT_HLT,
     Io = c.KVM_EXIT_IO,
     Mmio = c.KVM_EXIT_MMIO,
+    Shutdown = c.KVM_EXIT_SHUTDOWN,
 };
 
 pub const IoDirection = enum(u8) {
@@ -37,10 +38,10 @@ pub const ExitReason = union(ExitReasonRaw) {
         data: u64,
         write: bool,
     },
+    Shutdown: void,
 };
 
 pub const IoResult = union(enum) {
-    Io: void,
     Mmio: struct {
         data: u64,
     },
@@ -114,6 +115,7 @@ pub const Vcpu = struct {
 
         return switch (raw) {
             .Halt => .Halt,
+            .Shutdown => .Shutdown,
             .Io => blk: {
                 const dir = try (std.enums.fromInt(
                     IoDirection,
@@ -146,9 +148,6 @@ pub const Vcpu = struct {
     pub fn run_once(self: *const Self, result: ?IoResult) !void {
         if (result) |res| {
             switch (res) {
-                .Io => |io| {
-                    _ = io;
-                },
                 .Mmio => |mmio| {
                     self.run.unnamed_0.mmio.data = @bitCast(mmio.data);
                 },

@@ -33,7 +33,7 @@ const MAGIC = 0x53726448;
 const SUPPORTED_VERSION = 0x20f;
 
 const MINIMAL_SIZE = SETUP_HEADER_OFFSET + @bitSizeOf(SetupHeader) / 8;
-const DEFAULT_CMD_LINE: [*:0]const u8 = "console=ttyS0 earlycon=uart,io,0x3f8 nokaslr pci=off i8042.nokbd i8042.noaux";
+const DEFAULT_CMD_LINE: [*:0]const u8 = "console=ttyS0 earlycon=uart,io,0x3f8 nokaslr pci=off panic=-1 reboot=t";
 
 fn fill_e820(params: *BootParams, config: *const VmConfig) void {
     const layout = arch.layout.memory_layout(config);
@@ -75,9 +75,42 @@ pub fn parse(data: []const u8, memory: *GuestMemory, config: *const VmConfig) !I
     if (header.xloadflags & (1 << 0) == 0)
         return error.InvalidxLoadFlags;
 
+    // We want to load initramfs above 4G
+    if (header.xloadflags & (1 << 1) == 0)
+        return error.InvalidxLoadFlags;
+
     // For now keep 1Gib for simplicity
     if (header.init_size > 1 << 30)
         return error.InvalidInitSize;
+
+    if (config.binary.len > config.ram_size) {
+        return error.InvalidImageSize;
+    }
+
+    @memcpy(std.mem.asBytes(&boot_params.hdr), std.mem.asBytes(header));
+
+    if (config.initramfs) |fs| {
+        // Now we know that both things should fit. We load image at the beginning of high RAM. And
+        // initrd at the end of the high ram to prevent accidental overwrite during decompress
+        const high_ram_end = arch.layout.HIGH_RAM_BEGIN + config.ram_size;
+        const initrd_begin = std.mem.alignBackward(
+            u64,
+            high_ram_end - fs.len,
+            4096,
+        );
+
+        if (initrd_begin + fs.len > arch.layout.HIGH_RAM_BEGIN + config.ram_size) {
+            return error.InvalidImageSize;
+        }
+
+        try memory.write(initrd_begin, fs);
+
+        boot_params.hdr.ramdisk_image = @truncate(initrd_begin);
+        boot_params.ext_ramdisk_image = @truncate(initrd_begin >> 32);
+
+        boot_params.hdr.ramdisk_size = @truncate(fs.len);
+        boot_params.ext_ramdisk_size = @truncate(fs.len >> 32);
+    }
 
     fill_e820(&boot_params, config);
 
@@ -86,8 +119,10 @@ pub fn parse(data: []const u8, memory: *GuestMemory, config: *const VmConfig) !I
     const sects = if (header.setup_sects == 0) 4 else header.setup_sects;
     const kernel_offset = @as(usize, (sects + 1)) * 512;
 
-    @memcpy(std.mem.asBytes(&boot_params.hdr), std.mem.asBytes(header));
     boot_params.hdr.cmd_line_ptr = arch.layout.BOOT_CMDLINE_ADDR;
+
+    // NOTE: linux needs type_of_loader to be set for initramfs. Not sure why...
+    boot_params.hdr.type_of_loader = 0xff;
 
     const zig_slice = std.mem.span(
         @as([*:0]const u8, @ptrCast(DEFAULT_CMD_LINE)),
@@ -95,11 +130,11 @@ pub fn parse(data: []const u8, memory: *GuestMemory, config: *const VmConfig) !I
 
     try memory.write(arch.layout.BOOT_CMDLINE_ADDR, zig_slice);
     try memory.write(arch.layout.BOOT_PARAM_ADDR, std.mem.asBytes(&boot_params));
-    try memory.write(0x100000, data[kernel_offset..]);
+    try memory.write(arch.layout.HIGH_RAM_BEGIN, data[kernel_offset..]);
 
     return .{
-        .ep = 0x100000 + 0x200,
-        .load_address = 0x100000,
+        .ep = arch.layout.HIGH_RAM_BEGIN + 0x200,
+        .load_address = arch.layout.HIGH_RAM_BEGIN,
     };
 }
 
