@@ -124,14 +124,15 @@ pub const Vm = struct {
 
             switch (exit) {
                 .Io => |io_req| {
-                    result = try self.io_bus.handle_io(io_req, self, self.io);
+                    // Detecting write to fake port, which indicates test exit
+                    if (try self.io_bus.handle_io(io_req, self, self.io)) {
+                        return;
+                    }
                 },
                 .Shutdown => {
-                    std.debug.print("VM reboots\n", .{});
                     return;
                 },
                 .Halt => {
-                    std.debug.print("VM halts\n", .{});
                     return;
                 },
                 .Mmio => |mmio| {
@@ -142,32 +143,32 @@ pub const Vm = struct {
     }
 };
 
-// test "guest port write reaches COM1 UART" {
-//     const io = std.testing.io;
-//     const allocator = std.testing.allocator;
-//     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
-//         io,
-//         "test_bins/64bit_guest.bin",
-//         allocator,
-//         .unlimited,
-//     );
-//     defer allocator.free(binary_bytes);
-//     var vm = try Vm.new(.{
-//         .ram_size = 0x20000,
-//         .binary = binary_bytes,
-//     }, io, allocator);
-//     defer vm.deinit(allocator);
-//
-//     var uart_output = try test_utils.TmpUartOutput.create();
-//     defer uart_output.deinit();
-//     vm.io_bus.com1.file = uart_output.file;
-//     defer vm.io_bus.com1.file = std.Io.File.stdout();
-//
-//     try vm.run();
-//
-//     var captured: [16]u8 = undefined;
-//     try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
-// }
+test "guest port write reaches COM1 UART" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/64bit_guest.bin",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    var vm = try Vm.new(.{
+        .ram_size = 0x20000,
+        .binary = binary_bytes,
+    }, io, allocator);
+    defer vm.deinit(allocator);
+
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+    vm.io_bus.com1.file = uart_output.file;
+    defer vm.io_bus.com1.file = std.Io.File.stdout();
+
+    try vm.run();
+
+    var captured: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
+}
 
 test "linux reaches shutdown" {
     const io = std.testing.io;

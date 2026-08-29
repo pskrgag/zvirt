@@ -15,7 +15,7 @@ com1: device.uart_16550.Uart = .{
 config_address: u32 = 0,
 cmos: device.cmos.Cmos = .{},
 
-pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !?IoResult {
+pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
     const data_len =
         @as(usize, io_request.size) *
@@ -46,7 +46,11 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !?IoResu
                 std.mem.writeInt(u8, data_ptr[0..1], res, .little);
             }
 
-            return null;
+            return false;
+        },
+        // Special port to indicate test exit
+        0xf4 => {
+            return true;
         },
         // No COM{2,4}, no floppy, no POST diagnostics
         0x2f8...0x2ff, 0x3e8...0x3ef, 0x2e8...0x2ef, 0x3F0...0x3F7, 0x80 => {
@@ -56,7 +60,7 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !?IoResu
             if (io_request.dir == .Out)
                 std.mem.writeInt(u8, data_ptr[0..1], 0xff, .little);
 
-            return null;
+            return false;
         },
         0x70...0x71 => {
             if (io_request.size != 1)
@@ -75,19 +79,19 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !?IoResu
                 std.mem.writeInt(u8, data_ptr[0..1], res, .little);
             }
 
-            return null;
+            return false;
         },
 
         // DMA: todo
         0x87 => {
-            return null;
+            return false;
         },
 
         // PCI (which we don't support yet)
         0xcf8 => {
             if (io_request.dir == .Out and io_request.size == 4) {
                 self.config_address = std.mem.readInt(u32, data[0..4], .little);
-                return null;
+                return false;
             } else {
                 @panic("todo");
             }
@@ -97,7 +101,7 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !?IoResu
                 std.mem.writeInt(u32, data_ptr[0..4], 0xFFFFFFFF, .little);
             }
 
-            return null;
+            return false;
         },
         else => {
             std.debug.print("Unknown port {any}\n", .{io_request});
