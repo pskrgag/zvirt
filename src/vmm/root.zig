@@ -19,6 +19,8 @@ const arch = switch (builtin.cpu.arch) {
 const MAX_VCPUS = 16;
 var kvm_system = lazy(kvm.Kvm, kvm.Kvm.init);
 
+const StopFlag = std.atomic.Value(bool);
+
 pub const VmConfig = struct {
     // Memory size (in bytes)
     ram_size: usize,
@@ -35,14 +37,14 @@ pub const VmConfig = struct {
 
 pub const Vm = struct {
     vm: kvm.Vm,
-    vcpus: [MAX_VCPUS]?kvm.Vcpu,
-    io_bus: arch.io_bus,
-    mmio_bus: arch.mmio_bus,
+    vcpus: [MAX_VCPUS]?kvm.Vcpu = .{null} ** MAX_VCPUS,
+    io_bus: arch.io_bus = .{},
+    mmio_bus: arch.mmio_bus = .{},
     io: std.Io,
-    binary: ?std.ArrayList(u8),
     allocator: std.mem.Allocator,
     config: VmConfig,
     memory: memory.GuestMemory,
+    stop: StopFlag = StopFlag.init(false),
 
     const Self = @This();
 
@@ -64,11 +66,7 @@ pub const Vm = struct {
         var self: Self = .{
             .vm = vm,
             .memory = mem,
-            .vcpus = .{null} ** MAX_VCPUS,
-            .io_bus = arch.io_bus{},
-            .mmio_bus = arch.mmio_bus{},
             .io = io,
-            .binary = null,
             .allocator = allocator,
             .config = config,
         };
@@ -82,9 +80,6 @@ pub const Vm = struct {
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
-        if (self.binary) |*binary|
-            binary.deinit(self.allocator);
-
         for (&self.vcpus) |*vcpu| {
             if (vcpu.*) |*cpu|
                 cpu.deinit();
@@ -108,16 +103,37 @@ pub const Vm = struct {
         return vcpu;
     }
 
+    fn wake_handler(_: std.posix.SIG) callconv(.c) void {}
+
+    fn setup_sighandler() void {
+        const action = std.posix.Sigaction{
+            .handler = .{ .handler = @alignCast(&wake_handler) },
+            .mask = std.posix.sigemptyset(),
+            .flags = 0, // no SA_RESTART
+        };
+
+        std.posix.sigaction(.USR1, &action, null);
+    }
+
+    pub fn ask_stop(self: *Vm) void {
+        self.stop.store(true, .release);
+        self.vcpus[0].?.immediate_exit();
+    }
+
     pub fn run(self: *Self) !void {
         const boot_vcpu = if (self.vcpus[0]) |*vcpu|
             vcpu
         else
             return error.BootVcpuMissing;
 
+        Self.setup_sighandler();
         var result: ?IoResult = null;
 
-        while (true) {
-            try boot_vcpu.run_once(result);
+        while (!self.stop.load(.acquire)) {
+            boot_vcpu.run_once(result) catch |e| {
+                if (e != error.Interrupted)
+                    return e;
+            };
 
             const exit = try boot_vcpu.exit_reason();
             // std.debug.print("exit reason {any}\n", .{exit});
@@ -138,6 +154,7 @@ pub const Vm = struct {
                 .Mmio => |mmio| {
                     result = try self.mmio_bus.handle_mmio(mmio, self.io);
                 },
+                .Interrupted => {},
             }
         }
     }
@@ -193,6 +210,77 @@ test "linux reaches shutdown" {
     defer vm.io_bus.com1.file = std.Io.File.stdout();
 
     try vm.run();
+}
+
+fn wait_for_output(
+    output: *const test_utils.TmpUartOutput,
+    needle: []const u8,
+) !void {
+    const io = std.testing.io;
+
+    const deadline = std.Io.Clock.awake.now(io).addDuration(
+        std.Io.Duration.fromSeconds(10),
+    );
+
+    var buffer: [128 * 1024]u8 = undefined;
+
+    while (std.Io.Clock.awake.now(io).nanoseconds < deadline.nanoseconds) {
+        const contents = try output.read(&buffer);
+
+        if (std.mem.indexOf(u8, contents, needle) != null)
+            return;
+
+        try std.Io.sleep(
+            io,
+            std.Io.Duration.fromMilliseconds(10),
+            .awake,
+        );
+    }
+
+    return error.Timeout;
+}
+
+fn vm_run_thread(vm: *Vm) !void {
+    try vm.run();
+}
+
+test "linux reaches console" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/bzImage",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    const initrd_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/initrd.img",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(initrd_bytes);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+    }, io, allocator);
+    defer vm.deinit(allocator);
+
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+    vm.io_bus.com1.file = uart_output.file;
+    defer vm.io_bus.com1.file = std.Io.File.stdout();
+
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{&vm});
+    try wait_for_output(&uart_output, "login");
+
+    // Stop the vm
+    vm.ask_stop();
+    _ = std.c.pthread_kill(thread.getHandle(), .USR1);
+    thread.join();
 }
 
 test {

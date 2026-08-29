@@ -17,6 +17,7 @@ pub const ExitReasonRaw = enum(usize) {
     Io = c.KVM_EXIT_IO,
     Mmio = c.KVM_EXIT_MMIO,
     Shutdown = c.KVM_EXIT_SHUTDOWN,
+    Interrupted = c.KVM_EXIT_INTR,
 };
 
 pub const IoDirection = enum(u8) {
@@ -39,6 +40,7 @@ pub const ExitReason = union(ExitReasonRaw) {
         write: bool,
     },
     Shutdown: void,
+    Interrupted: void,
 };
 
 pub const IoResult = union(enum) {
@@ -107,7 +109,6 @@ pub const Vcpu = struct {
     }
 
     pub fn exit_reason(self: *const Self) !ExitReason {
-        // std.debug.print("exit reason {}\n", .{self.run.exit_reason});
         const raw = try (std.enums.fromInt(
             ExitReasonRaw,
             self.run.exit_reason,
@@ -135,6 +136,7 @@ pub const Vcpu = struct {
                 .write = self.run.unnamed_0.mmio.is_write == 1,
                 .pa = self.run.unnamed_0.mmio.phys_addr,
             } },
+            .Interrupted => .Interrupted,
         };
     }
 
@@ -143,6 +145,10 @@ pub const Vcpu = struct {
 
         const res = linux.close(@intCast(self.fd));
         std.debug.assert(res == 0);
+    }
+
+    pub fn immediate_exit(self: *Self) void {
+        self.run.immediate_exit = 1;
     }
 
     pub fn run_once(self: *const Self, result: ?IoResult) !void {

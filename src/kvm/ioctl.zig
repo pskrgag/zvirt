@@ -11,6 +11,9 @@ pub fn ioctl(fd: posix.fd_t, request: u32, arg: usize) !usize {
         .SUCCESS => {
             return rc;
         },
+        .INTR => {
+            return error.Interrupted;
+        },
         else => {
             return error.IoctlFailed;
         },
