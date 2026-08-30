@@ -15,6 +15,7 @@ pub const VCpuExitReason = enum(u8) {
     UnhandledException,
     TestExit,
     Aborted,
+    InternalError,
     None,
 };
 
@@ -76,12 +77,18 @@ pub const VCpu = struct {
         self.thread.join();
         self.eventfd.deinit();
 
+        self.cpu.deinit();
         alloc.destroy(self);
     }
 
     fn run_loop(self: *Self, io: std.Io) !void {
         try self.start_event.wait(io);
         var result: ?IoResult = null;
+
+        // May happen if smth went wrong on syscall level.
+        errdefer {
+            self.exit_reason.store(.InternalError, .monotonic);
+        }
 
         // Once thread reaches the end of the function, vCPU is dead. Signal it to the main thread.
         defer {

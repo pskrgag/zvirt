@@ -79,18 +79,17 @@ pub const Vm = struct {
         var vm = try system.create_vm();
         errdefer vm.deinit();
 
+        try vm.create_irqchip();
+
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
 
-        try arch.setup_memory(&mem, &config, allocator);
+        try arch.setup_vm(&vm, &mem, &config, allocator);
         const img = try image.parse(config.binary, &mem, &config);
 
         for (mem.regions.items) |reg| {
             try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
         }
-
-        try vm.create_irqchip();
-        try arch.setup_vm(&vm);
 
         self.* = .{
             .vm = vm,
@@ -120,6 +119,8 @@ pub const Vm = struct {
                 cpu.deinit(alloc);
         }
 
+        try arch.deinit_vm(&self.memory, &self.config);
+        self.epoll.deinit();
         self.device_bus.deinit();
         self.vm.deinit();
         self.memory.deinit(alloc);

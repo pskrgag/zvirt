@@ -103,11 +103,24 @@ pub fn setup_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
     try vcpu.set_regs(&regs);
 }
 
-pub fn setup_vm(vm: *kvm.Vm) !void {
+pub fn setup_vm(vm: *kvm.Vm, memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
     try vm.create_pit();
+    try setup_memory(memory, config, alloc);
 }
 
-pub fn setup_memory(memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
+pub fn deinit_vm(memory: *GuestMemory, config: *const VmConfig) !void {
+    var rams: usize = 0;
+
+    // TODO: this smells
+    for (layout.memory_layout(config)) |entry| {
+        if (entry.kind == .Ram) {
+            posix.munmap(@alignCast(memory.regions.items[rams].raw));
+            rams += 1;
+        }
+    }
+}
+
+fn setup_memory(memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
     for (layout.memory_layout(config)) |entry| {
         if (entry.kind == .Ram) {
             const ram = try posix.mmap(
