@@ -231,6 +231,10 @@ test "guest port write reaches COM1 UART" {
 
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
     const fds = try test_utils.FdLeakDetector.snapshot(io);
     defer fds.check_leak(io) catch @panic("fd leaked");
 
@@ -264,6 +268,10 @@ test "linux reaches shutdown" {
 
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
     const fds = try test_utils.FdLeakDetector.snapshot(io);
     defer fds.check_leak(io) catch @panic("fd leaked");
 
@@ -327,6 +335,10 @@ test "linux login and reboot" {
 
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
     const fds = try test_utils.FdLeakDetector.snapshot(io);
     defer fds.check_leak(io) catch @panic("fd leaked");
 
@@ -399,6 +411,10 @@ test "linux reaches console" {
 
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
     const fds = try test_utils.FdLeakDetector.snapshot(io);
     defer fds.check_leak(io) catch @panic("fd leaked");
 

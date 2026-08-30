@@ -6,6 +6,7 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const ioctl = @import("ioctl.zig").ioctl;
+const mmap = @import("test_utils").mmap;
 
 pub const Regs = c.kvm_regs;
 pub const Sregs = c.kvm_sregs;
@@ -58,7 +59,7 @@ pub const Vcpu = struct {
     const Self = @This();
 
     pub fn init(fd: posix.fd_t, mmap_size: usize, id: usize) !Self {
-        const run_mapping = try posix.mmap(
+        const run_mapping = try mmap.mmap(
             null,
             mmap_size,
             .{ .READ = true, .WRITE = true },
@@ -141,7 +142,7 @@ pub const Vcpu = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        posix.munmap(self.run_mapping);
+        mmap.munmap(self.run_mapping);
 
         const res = linux.close(@intCast(self.fd));
         std.debug.assert(res == 0);

@@ -13,6 +13,8 @@ const arch = switch (builtin.cpu.arch) {
 const std = @import("std");
 const Image = @import("root.zig").Image;
 const GuestMemory = @import("../memory.zig").GuestMemory;
+const test_utils = @import("test_utils");
+const mmap = @import("test_utils").mmap;
 
 pub const SETUP_HEADER_OFFSET = 0x1F1;
 pub const SETUP_HEADER_SIZE = 0x7B;
@@ -141,6 +143,13 @@ pub fn parse(data: []const u8, memory: *GuestMemory, config: *const VmConfig) !I
 test "test Linux kernel" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
         "test_bins/bzImage",
@@ -151,7 +160,7 @@ test "test Linux kernel" {
     var mem = try GuestMemory.new(allocator);
     defer mem.deinit(allocator);
 
-    const ram = try std.posix.mmap(
+    const ram = try mmap.mmap(
         null,
         1 << 30,
         .{ .READ = true, .WRITE = true },
@@ -159,6 +168,7 @@ test "test Linux kernel" {
         -1,
         0,
     );
+    defer mmap.munmap(ram);
 
     try mem.add(0x0, ram[0 .. 1 << 30], allocator);
     _ = try parse(binary_bytes, &mem, &VmConfig{ .ram_size = 2 << 30, .binary = "" });

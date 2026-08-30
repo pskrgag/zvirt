@@ -25,6 +25,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/kvm/root.zig"),
         .target = target,
         .link_libc = true,
+        .imports = &.{
+            .{ .name = "test_utils", .module = test_utils },
+        },
     });
 
     const vmm = b.addModule("vmm", .{
@@ -128,12 +131,17 @@ pub fn build(b: *std.Build) void {
         .root_module = utils,
     });
 
+    const test_util_tests = b.addTest(.{
+        .root_module = test_utils,
+    });
+
     const vmm_tests = b.addTest(.{
         .root_module = vmm,
     });
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
     const run_util_tests = b.addRunArtifact(util_tests);
+    const run_test_util_tests = b.addRunArtifact(test_util_tests);
     const run_vmm_tests = b.addRunArtifact(vmm_tests);
 
     // Creates an executable that will run `test` blocks from the executable's
@@ -151,6 +159,7 @@ pub fn build(b: *std.Build) void {
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_util_tests.step);
+    test_step.dependOn(&run_test_util_tests.step);
     test_step.dependOn(&run_vmm_tests.step);
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);

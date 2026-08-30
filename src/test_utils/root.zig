@@ -1,7 +1,11 @@
 //! Helpers shared by integration tests.
 
 const std = @import("std");
+const posix = std.posix;
+const linux = std.os.linux;
 const Dir = std.Io.Dir;
+
+pub const mmap = @import("mmap.zig");
 
 pub const TmpUartOutput = struct {
     tmp: std.testing.TmpDir,
@@ -53,8 +57,36 @@ pub const FdLeakDetector = struct {
         const new = try Self.snapshot(io);
 
         if (new.count != self.count) {
-            std.debug.print("FDLEAK: old {} new {}\n", .{self.count, new.count});
+            std.debug.print("FDLEAK: old {} new {}\n", .{ self.count, new.count });
             return error.FdLeaked;
         }
     }
 };
+
+test "leak detector works" {
+    const io = std.testing.io;
+
+    {
+        const snapshot = try FdLeakDetector.snapshot(io);
+        try snapshot.check_leak(io);
+    }
+
+    {
+        const snapshot = try FdLeakDetector.snapshot(io);
+        const fd = try posix.openat(
+            posix.AT.FDCWD,
+            "/dev/null",
+            .{
+                .ACCMODE = .RDONLY,
+            },
+            0,
+        );
+        defer _ = linux.close(fd);
+
+        try std.testing.expectError(error.FdLeaked, snapshot.check_leak(io));
+    }
+}
+
+test {
+    _ = @import("mmap.zig");
+}

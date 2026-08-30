@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 const gdt = @import("gdt.zig");
 const paging = @import("paging.zig");
 const IoResult = @import("kvm").IoResult;
+const mmap = @import("test_utils").mmap;
 
 pub const layout = @import("layout.zig");
 
@@ -114,7 +115,7 @@ pub fn deinit_vm(memory: *GuestMemory, config: *const VmConfig) !void {
     // TODO: this smells
     for (layout.memory_layout(config)) |entry| {
         if (entry.kind == .Ram) {
-            posix.munmap(@alignCast(memory.regions.items[rams].raw));
+            mmap.munmap(@alignCast(memory.regions.items[rams].raw));
             rams += 1;
         }
     }
@@ -123,7 +124,7 @@ pub fn deinit_vm(memory: *GuestMemory, config: *const VmConfig) !void {
 fn setup_memory(memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
     for (layout.memory_layout(config)) |entry| {
         if (entry.kind == .Ram) {
-            const ram = try posix.mmap(
+            const ram = try mmap.mmap(
                 null,
                 entry.length,
                 .{ .READ = true, .WRITE = true },
