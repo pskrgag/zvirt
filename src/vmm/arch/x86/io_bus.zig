@@ -5,15 +5,64 @@ const device = @import("../../device/root.zig");
 const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
 const Vm = @import("../../root.zig").Vm;
+const Mutex = std.Io.Mutex;
+const posix = std.posix;
 
 const Self = @This();
 
+com1_mutex: Mutex = Mutex.init,
 com1: device.uart_16550.Uart = .{
-    .file = std.Io.File.stdout(),
+    .in = std.Io.File.stdin(),
+    .out = std.Io.File.stdout(),
 },
+original: ?posix.termios = null,
 
 config_address: u32 = 0,
 cmos: device.cmos.Cmos = .{},
+
+fn setup_terminal(self: *Self, fd: posix.fd_t) !void {
+    const original = try posix.tcgetattr(fd);
+    var raw = original;
+
+    // Deliver input without waiting for a newline.
+    raw.lflag.ICANON = false;
+
+    // Do not echo typed characters.
+    raw.lflag.ECHO = false;
+
+    // Keep Ctrl-C, Ctrl-Z, etc. working as signals.
+    raw.lflag.ISIG = true;
+
+    // A read may return as soon as one byte is available.
+    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
+    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+
+    try posix.tcsetattr(fd, .NOW, raw);
+    self.original = original;
+}
+
+pub fn init(self: *Self, vm: *Vm) !void {
+    if (self.com1.out.handle == std.Io.File.stdout().handle) {
+        try self.setup_terminal(std.Io.File.stdout().handle);
+    }
+
+    self.com1.init();
+    try vm.register_fd(self.com1.in.handle, 0, .io_bus);
+}
+
+pub fn deinit(self: *Self) void {
+    if (self.original) |orig|
+        posix.tcsetattr(self.com1.in.handle, .NOW, orig) catch @panic("failed to restore term");
+}
+
+pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
+    if (id == 0) {
+        try self.com1_mutex.lock(io);
+        defer self.com1_mutex.unlock(io);
+
+        try self.com1.handle_event(vm, io);
+    }
+}
 
 pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
@@ -28,6 +77,9 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
         0x3f8...0x3ff => {
             if (io_request.size != 1)
                 return error.InvalidWrite;
+
+            try self.com1_mutex.lock(io);
+            defer self.com1_mutex.unlock(io);
 
             if (io_request.dir == .Out) {
                 try self.com1.write_reg(

@@ -29,6 +29,7 @@ const StopFlag = std.atomic.Value(bool);
 
 const EventSource = enum(u3) {
     vcpu,
+    io_bus,
 };
 
 const EventToken = packed struct(u64) {
@@ -94,6 +95,9 @@ pub const Vm = struct {
             .config = config,
             .epoll = try Epoll.new(),
         };
+        errdefer self.epoll.deinit();
+
+        try self.io_bus.init(self);
 
         _ = try self.create_vcpu(img.ep, 0, io, allocator);
         return self;
@@ -109,6 +113,7 @@ pub const Vm = struct {
                 cpu.deinit(alloc);
         }
 
+        self.io_bus.deinit();
         self.vm.deinit();
         self.memory.deinit(alloc);
         alloc.destroy(self);
@@ -150,7 +155,7 @@ pub const Vm = struct {
         }
     }
 
-    fn register_fd(self: *Self, fd: posix.fd_t, id: u29, source: EventSource) !void {
+    pub fn register_fd(self: *Self, fd: posix.fd_t, id: u29, source: EventSource) !void {
         const token = EventToken{
             .id = id,
             .fd = fd,
@@ -192,6 +197,9 @@ pub const Vm = struct {
                             break;
                         }
                     },
+                    .io_bus => {
+                        try self.io_bus.handle_event(token.id, self, io);
+                    },
                 }
             }
 
@@ -228,8 +236,8 @@ test "guest port write reaches COM1 UART" {
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
-    vm.io_bus.com1.file = uart_output.file;
-    defer vm.io_bus.com1.file = std.Io.File.stdout();
+    vm.io_bus.com1.out = uart_output.file;
+    defer vm.io_bus.com1.out = std.Io.File.stdout();
 
     try vm.run(io);
 
@@ -256,8 +264,8 @@ test "linux reaches shutdown" {
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
-    vm.io_bus.com1.file = uart_output.file;
-    defer vm.io_bus.com1.file = std.Io.File.stdout();
+    vm.io_bus.com1.out = uart_output.file;
+    defer vm.io_bus.com1.out = std.Io.File.stdout();
 
     try vm.run(io);
 }
@@ -321,8 +329,8 @@ test "linux reaches console" {
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
-    vm.io_bus.com1.file = uart_output.file;
-    defer vm.io_bus.com1.file = std.Io.File.stdout();
+    vm.io_bus.com1.out = uart_output.file;
+    defer vm.io_bus.com1.out = std.Io.File.stdout();
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
     try wait_for_output(&uart_output, "login");

@@ -94,7 +94,8 @@ const Iir = packed struct(u8) {
 };
 
 pub const Uart = struct {
-    file: File,
+    in: File,
+    out: File,
     lcr: Lcr = .{},
     scr: u8 = 0,
     mcr: u8 = 0,
@@ -104,12 +105,70 @@ pub const Uart = struct {
     lsr: Lsr = .{},
     iir: Iir = .{},
     thre_pending: bool = false,
+    storage: [128]u8 = undefined,
+    rx_queue: std.Deque(u8) = undefined,
 
     const Self = @This();
 
+    pub fn init(self: *Self) void {
+        self.rx_queue = std.Deque(u8).initBuffer(&self.storage);
+    }
+
+    pub fn handle_event(self: *Self, vm: *Vm, io: std.Io) !void {
+        while (true) {
+            var buffer: [1024]u8 = undefined;
+            var buffers: [1][]u8 = .{buffer[0..]};
+
+            const read = try self.in.readStreaming(io, &buffers);
+            try self.push_rx_bytes(buffer[0..read], vm);
+
+            if (read < 1024)
+                break;
+        }
+    }
+
+    fn push_rx_bytes(self: *Self, bytes: []const u8, vm: *Vm) !void {
+        for (bytes) |byte| {
+            self.rx_queue.pushBackBounded(byte) catch @panic("todo");
+        }
+
+        if (self.rx_queue.len > 0) {
+            self.lsr.data_ready = 1;
+            try self.update_irq(vm);
+        }
+    }
+
+    fn pop_rx_byte(self: *Self) u8 {
+        const res = self.rx_queue.popFront() orelse 0;
+
+        if (self.rx_queue.len == 0) {
+            self.lsr.data_ready = 0;
+        }
+
+        return res;
+    }
+
+    fn pending_irq(self: *const Self) ?Irq {
+        if (self.lsr.data_ready != 0)
+            return .ReceiveData;
+
+        if (self.thre_pending)
+            return .TransmitterEmpty;
+
+        return null;
+    }
+
+    fn update_irq(self: *Self, vm: *Vm) !void {
+        if (self.pending_irq()) |pending| {
+            try self.set_irq(pending, vm);
+        } else {
+            try self.clear_irq(vm);
+        }
+    }
+
     fn write_byte(self: *Self, data: u8, io: Io) !void {
         const arr = [_]u8{data};
-        try self.file.writeStreamingAll(io, &arr);
+        try self.out.writeStreamingAll(io, &arr);
     }
 
     fn dlap(self: *const Self) bool {
@@ -117,7 +176,7 @@ pub const Uart = struct {
     }
 
     fn irq_enabled(self: *const Self) bool {
-        return self.ier.thre != 0;
+        return (self.ier.thre | self.ier.recieve_line | self.ier.receive_irq) != 0;
     }
 
     fn get_read_register(self: *const Self, reg: Register) ReadRegister {
@@ -168,9 +227,12 @@ pub const Uart = struct {
             .Thr => {
                 try self.write_byte(data, io);
                 self.thre_pending = true;
-                try self.set_irq(.TransmitterEmpty, vm);
+                try self.update_irq(vm);
             },
-            .Ier => self.ier = @bitCast(data),
+            .Ier => {
+                self.ier = @bitCast(data);
+                try self.update_irq(vm);
+            },
             .Fcr => {},
             .Lcr => {
                 self.lcr = @bitCast(data);
@@ -186,16 +248,22 @@ pub const Uart = struct {
     fn read_reg_interal(self: *Self, reg: ReadRegister, vm: *Vm, io: Io) !u8 {
         _ = io;
 
-        // std.debug.print("read {}\n", .{reg});
         return switch (reg) {
-            .Rbr => 0x0,
+            .Rbr => blk: {
+                const res = self.pop_rx_byte();
+
+                try self.update_irq(vm);
+                break :blk res;
+            },
             .Ier => @bitCast(self.ier),
             .Iir => blk: {
                 const res: u8 = @bitCast(self.iir);
 
-                if (self.thre_pending) {
+                if (self.iir.irq == .TransmitterEmpty) {
+                    std.debug.assert(self.thre_pending);
                     self.thre_pending = false;
-                    try self.clear_irq(vm);
+
+                    try self.update_irq(vm);
                 }
 
                 break :blk res;
@@ -218,7 +286,6 @@ pub const Uart = struct {
 
     pub fn read_reg(self: *Self, reg: Register, vm: *Vm, io: Io) !u8 {
         const mapped = self.get_read_register(reg);
-        // std.debug.print("ehy {}\n", .{mapped});
 
         return self.read_reg_interal(mapped, vm, io);
     }
