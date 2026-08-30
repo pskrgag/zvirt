@@ -218,6 +218,7 @@ pub const Uart = struct {
 
     pub fn read_reg(self: *Self, reg: Register, vm: *Vm, io: Io) !u8 {
         const mapped = self.get_read_register(reg);
+        // std.debug.print("ehy {}\n", .{mapped});
 
         return self.read_reg_interal(mapped, vm, io);
     }

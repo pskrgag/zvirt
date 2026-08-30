@@ -1,17 +1,23 @@
 //! Virtual-machine policy and guest setup.
 
+const utils = @import("utils");
 const std = @import("std");
 const kvm = @import("kvm");
 const posix = std.posix;
 const builtin = @import("builtin");
-const lazy = @import("utils").Lazy.lazy;
+const lazy = utils.Lazy.lazy;
 const test_utils = @import("test_utils");
 const image = @import("image/root.zig");
+const VCpu = @import("vcpu.zig").VCpu;
+const Epoll = utils.Epoll.Epoll;
+const EpollEvent = utils.Epoll.Event;
+const linux = std.os.linux;
+const EventFd = utils.EventFd.EventFd;
 pub const IoResult = kvm.IoResult;
 
 const memory = @import("memory.zig");
 
-const arch = switch (builtin.cpu.arch) {
+pub const arch = switch (builtin.cpu.arch) {
     .x86, .x86_64 => @import("arch/x86/root.zig"),
     else => @compileError("unsupported architecture"),
 };
@@ -20,6 +26,16 @@ const MAX_VCPUS = 16;
 var kvm_system = lazy(kvm.Kvm, kvm.Kvm.init);
 
 const StopFlag = std.atomic.Value(bool);
+
+const EventSource = enum(u3) {
+    vcpu,
+};
+
+const EventToken = packed struct(u64) {
+    id: u29,
+    fd: posix.fd_t,
+    source: EventSource,
+};
 
 pub const VmConfig = struct {
     // Memory size (in bytes)
@@ -37,7 +53,7 @@ pub const VmConfig = struct {
 
 pub const Vm = struct {
     vm: kvm.Vm,
-    vcpus: [MAX_VCPUS]?kvm.Vcpu = .{null} ** MAX_VCPUS,
+    vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
     io_bus: arch.io_bus = .{},
     mmio_bus: arch.mmio_bus = .{},
     io: std.Io,
@@ -45,13 +61,20 @@ pub const Vm = struct {
     config: VmConfig,
     memory: memory.GuestMemory,
     stop: StopFlag = StopFlag.init(false),
+    epoll: Epoll,
 
     const Self = @This();
 
-    pub fn new(config: VmConfig, io: std.Io, allocator: std.mem.Allocator) !Self {
+    pub fn new(config: VmConfig, io: std.Io, allocator: std.mem.Allocator) !*Self {
         const system = try kvm_system.get();
+        var self = try allocator.create(Self);
+        errdefer allocator.destroy(self);
+
         var vm = try system.create_vm();
+        errdefer vm.deinit();
+
         var mem = try memory.GuestMemory.new(allocator);
+        errdefer mem.deinit(allocator);
 
         try arch.setup_memory(&mem, &config, allocator);
         const img = try image.parse(config.binary, &mem, &config);
@@ -63,15 +86,16 @@ pub const Vm = struct {
         try vm.create_irqchip();
         try arch.setup_vm(&vm);
 
-        var self: Self = .{
+        self.* = .{
             .vm = vm,
             .memory = mem,
             .io = io,
             .allocator = allocator,
             .config = config,
+            .epoll = try Epoll.new(),
         };
 
-        _ = try self.create_vcpu(img.ep, 0);
+        _ = try self.create_vcpu(img.ep, 0, io, allocator);
         return self;
     }
 
@@ -80,27 +104,31 @@ pub const Vm = struct {
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
-        for (&self.vcpus) |*vcpu| {
-            if (vcpu.*) |*cpu|
-                cpu.deinit();
+        for (self.vcpus) |vcpu| {
+            if (vcpu) |cpu|
+                cpu.deinit(alloc);
         }
 
         self.vm.deinit();
         self.memory.deinit(alloc);
+        alloc.destroy(self);
     }
 
-    pub fn create_vcpu(self: *Self, ep: u64, id: usize) !*kvm.Vcpu {
+    pub fn create_vcpu(
+        self: *Self,
+        ep: u64,
+        id: usize,
+        io: std.Io,
+        alloc: std.mem.Allocator,
+    ) !*VCpu {
         if (id >= MAX_VCPUS)
             return error.InvalidVcpuIndex;
 
         if (self.vcpus[id] != null)
             return error.VcpuAlreadyExists;
 
-        self.vcpus[id] = try self.vm.create_vcpu(id);
-        const vcpu = &self.vcpus[id].?;
-        try arch.setup_vcpu(vcpu, ep);
-
-        return vcpu;
+        self.vcpus[id] = try VCpu.new(self, id, ep, io, alloc);
+        return self.vcpus[id].?;
     }
 
     fn wake_handler(_: std.posix.SIG) callconv(.c) void {}
@@ -116,45 +144,67 @@ pub const Vm = struct {
     }
 
     pub fn ask_stop(self: *Vm) void {
-        self.stop.store(true, .release);
-        self.vcpus[0].?.immediate_exit();
+        for (self.vcpus) |vcpu| {
+            if (vcpu) |cpu|
+                cpu.stop();
+        }
     }
 
-    pub fn run(self: *Self) !void {
-        const boot_vcpu = if (self.vcpus[0]) |*vcpu|
-            vcpu
-        else
-            return error.BootVcpuMissing;
+    fn register_fd(self: *Self, fd: posix.fd_t, id: u29, source: EventSource) !void {
+        const token = EventToken{
+            .id = id,
+            .fd = fd,
+            .source = source,
+        };
 
+        try self.epoll.add(fd, @bitCast(token));
+    }
+
+    pub fn run(self: *Self, io: std.Io) !void {
         Self.setup_sighandler();
-        var result: ?IoResult = null;
 
-        while (!self.stop.load(.acquire)) {
-            boot_vcpu.run_once(result) catch |e| {
-                if (e != error.Interrupted)
-                    return e;
-            };
+        for (self.vcpus, 0..) |vcpu, idx| {
+            if (vcpu) |cpu| {
+                try self.register_fd(cpu.eventfd.fd, @truncate(idx), .vcpu);
+                cpu.start(io);
+            }
+        }
 
-            const exit = try boot_vcpu.exit_reason();
-            // std.debug.print("exit reason {any}\n", .{exit});
+        var panic_cpu: ?u64 = null;
 
-            switch (exit) {
-                .Io => |io_req| {
-                    // Detecting write to fake port, which indicates test exit
-                    if (try self.io_bus.handle_io(io_req, self, self.io)) {
-                        return;
+        while (true) {
+            var event_buffer: [1]EpollEvent = undefined;
+
+            const events = try self.epoll.pwait(&event_buffer, -1, linux.sigfillset());
+            for (events) |event| {
+                const token: EventToken = @bitCast(event.data);
+
+                switch (token.source) {
+                    .vcpu => {
+                        const eventfd = EventFd{ .fd = @intCast(token.fd) };
+
+                        // Read anyway to avoid hitting the same event.
+                        _ = try eventfd.read();
+
+                        // Only abort when vCPU panicked
+                        if (self.vcpus[token.id].?.get_exit_reason() != .None) {
+                            panic_cpu = token.id;
+                            break;
+                        }
+                    },
+                }
+            }
+
+            if (panic_cpu) |pcpu| {
+                for (self.vcpus, 0..) |vcpu, idx| {
+                    if (vcpu) |cpu| {
+                        if (idx != pcpu) {
+                            cpu.stop();
+                        }
                     }
-                },
-                .Shutdown => {
-                    return;
-                },
-                .Halt => {
-                    return;
-                },
-                .Mmio => |mmio| {
-                    result = try self.mmio_bus.handle_mmio(mmio, self.io);
-                },
-                .Interrupted => {},
+                }
+
+                break;
             }
         }
     }
@@ -181,7 +231,7 @@ test "guest port write reaches COM1 UART" {
     vm.io_bus.com1.file = uart_output.file;
     defer vm.io_bus.com1.file = std.Io.File.stdout();
 
-    try vm.run();
+    try vm.run(io);
 
     var captured: [16]u8 = undefined;
     try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
@@ -209,7 +259,7 @@ test "linux reaches shutdown" {
     vm.io_bus.com1.file = uart_output.file;
     defer vm.io_bus.com1.file = std.Io.File.stdout();
 
-    try vm.run();
+    try vm.run(io);
 }
 
 fn wait_for_output(
@@ -240,8 +290,8 @@ fn wait_for_output(
     return error.Timeout;
 }
 
-fn vm_run_thread(vm: *Vm) !void {
-    try vm.run();
+fn vm_run_thread(vm: *Vm, io: std.Io) !void {
+    try vm.run(io);
 }
 
 test "linux reaches console" {
@@ -274,12 +324,11 @@ test "linux reaches console" {
     vm.io_bus.com1.file = uart_output.file;
     defer vm.io_bus.com1.file = std.Io.File.stdout();
 
-    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{&vm});
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
     try wait_for_output(&uart_output, "login");
 
     // Stop the vm
     vm.ask_stop();
-    _ = std.c.pthread_kill(thread.getHandle(), .USR1);
     thread.join();
 }
 

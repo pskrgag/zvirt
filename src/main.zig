@@ -94,5 +94,5 @@ fn run() !void {
     }, io, allocator);
     defer vm.deinit(allocator);
 
-    try vm.run();
+    try vm.run(io);
 }
