@@ -311,6 +311,73 @@ fn vm_run_thread(vm: *Vm, io: std.Io) !void {
     try vm.run(io);
 }
 
+test "linux login and reboot" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/bzImage",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    const initrd_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/initrd.img",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(initrd_bytes);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+    }, io, allocator);
+    defer vm.deinit(allocator);
+
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+
+    var pipe_fds: [2]posix.fd_t = undefined;
+    const pipe_rc = linux.pipe2(&pipe_fds, .{ .CLOEXEC = true });
+    switch (posix.errno(pipe_rc)) {
+        .SUCCESS => {},
+        else => |err| return posix.unexpectedErrno(err),
+    }
+
+    const uart_input: std.Io.File = .{
+        .handle = pipe_fds[0],
+        .flags = .{ .nonblocking = false },
+    };
+    defer uart_input.close(io);
+
+    const input_writer: std.Io.File = .{
+        .handle = pipe_fds[1],
+        .flags = .{ .nonblocking = false },
+    };
+    defer input_writer.close(io);
+
+    try vm.attach_console(.{
+        .input = uart_input,
+        .output = uart_output.file,
+    });
+
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
+
+    // Login discards all input data after <enter>. So we need to push data lock-step.
+    try wait_for_output(&uart_output, "login");
+    try input_writer.writeStreamingAll(io, "root\n");
+
+    try wait_for_output(&uart_output, "Password:");
+    try input_writer.writeStreamingAll(io, "root\n");
+
+    try wait_for_output(&uart_output, "# ");
+    try input_writer.writeStreamingAll(io, "reboot\n");
+
+    thread.join();
+}
+
 test "linux reaches console" {
     const io = std.testing.io;
     const allocator = std.testing.allocator;
