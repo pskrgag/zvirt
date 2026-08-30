@@ -94,7 +94,7 @@ const Iir = packed struct(u8) {
 };
 
 pub const Uart = struct {
-    in: File,
+    in: ?File,
     out: File,
     lcr: Lcr = .{},
     scr: u8 = 0,
@@ -119,7 +119,9 @@ pub const Uart = struct {
             var buffer: [1024]u8 = undefined;
             var buffers: [1][]u8 = .{buffer[0..]};
 
-            const read = try self.in.readStreaming(io, &buffers);
+            // Unwrap here, since it this function must not be called if there is no
+            // input source
+            const read = try self.in.?.readStreaming(io, &buffers);
             try self.push_rx_bytes(buffer[0..read], vm);
 
             if (read < 1024)

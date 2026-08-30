@@ -5,16 +5,14 @@ const device = @import("../../device/root.zig");
 const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
 const Vm = @import("../../root.zig").Vm;
+const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const Mutex = std.Io.Mutex;
 const posix = std.posix;
 
 const Self = @This();
 
 com1_mutex: Mutex = Mutex.init,
-com1: device.uart_16550.Uart = .{
-    .in = std.Io.File.stdin(),
-    .out = std.Io.File.stdout(),
-},
+com1: ?device.uart_16550.Uart = null,
 original: ?posix.termios = null,
 
 config_address: u32 = 0,
@@ -41,18 +39,22 @@ fn setup_terminal(self: *Self, fd: posix.fd_t) !void {
     self.original = original;
 }
 
-pub fn init(self: *Self, vm: *Vm) !void {
-    if (self.com1.out.handle == std.Io.File.stdout().handle) {
-        try self.setup_terminal(std.Io.File.stdout().handle);
-    }
+pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
+    self.com1 = device.uart_16550.Uart{ .in = console.input, .out = console.output };
+    self.com1.?.init();
 
-    self.com1.init();
-    try vm.register_fd(self.com1.in.handle, 0, .io_bus);
+    if (console.input) |in|
+        try vm.register_fd(in.handle, 0, .io_bus);
+
+    if (console.configure_terminal) {
+        try self.setup_terminal(console.output.handle);
+    }
 }
 
 pub fn deinit(self: *Self) void {
+    // unwrap here, since if self.original exists, then com1 must also exist
     if (self.original) |orig|
-        posix.tcsetattr(self.com1.in.handle, .NOW, orig) catch @panic("failed to restore term");
+        posix.tcsetattr(self.com1.?.out.handle, .NOW, orig) catch @panic("failed to restore term");
 }
 
 pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
@@ -60,7 +62,8 @@ pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
         try self.com1_mutex.lock(io);
         defer self.com1_mutex.unlock(io);
 
-        try self.com1.handle_event(vm, io);
+        if (self.com1) |*com1|
+            try com1.handle_event(vm, io);
     }
 }
 
@@ -81,21 +84,23 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
             try self.com1_mutex.lock(io);
             defer self.com1_mutex.unlock(io);
 
-            if (io_request.dir == .Out) {
-                try self.com1.write_reg(
-                    std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
-                    data[0],
-                    vm,
-                    io,
-                );
-            } else {
-                const res = try self.com1.read_reg(
-                    std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
-                    vm,
-                    io,
-                );
+            if (self.com1) |*com1| {
+                if (io_request.dir == .Out) {
+                    try com1.write_reg(
+                        std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
+                        data[0],
+                        vm,
+                        io,
+                    );
+                } else {
+                    const res = try com1.read_reg(
+                        std.enums.fromInt(device.uart_16550.Register, io_request.port - 0x3f8).?,
+                        vm,
+                        io,
+                    );
 
-                std.mem.writeInt(u8, data_ptr[0..1], res, .little);
+                    std.mem.writeInt(u8, data_ptr[0..1], res, .little);
+                }
             }
 
             return false;

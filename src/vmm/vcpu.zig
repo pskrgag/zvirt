@@ -101,7 +101,7 @@ pub const VCpu = struct {
             switch (reason) {
                 .Io => |io_req| {
                     // Detecting write to fake port, which indicates test exit
-                    if (try self.vm.io_bus.handle_io(io_req, self.vm, io)) {
+                    if (try self.vm.device_bus.handle_io(io_req, self.vm, io)) {
                         self.exit_reason.store(.TestExit, .monotonic);
                         break;
                     }
@@ -111,7 +111,7 @@ pub const VCpu = struct {
                     break;
                 },
                 .Mmio => |mmio| {
-                    result = try self.vm.mmio_bus.handle_mmio(mmio, io);
+                    result = try self.vm.device_bus.handle_mmio(mmio, io);
                 },
                 .Interrupted => {},
                 .Halt => @panic("should not happen"),

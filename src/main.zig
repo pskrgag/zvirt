@@ -94,5 +94,10 @@ fn run() !void {
     }, io, allocator);
     defer vm.deinit(allocator);
 
+    try vm.attach_console(.{
+        .input = std.Io.File.stdin(),
+        .output = std.Io.File.stdout(),
+        .configure_terminal = true,
+    });
     try vm.run(io);
 }

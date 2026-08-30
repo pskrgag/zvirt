@@ -52,11 +52,16 @@ pub const VmConfig = struct {
     arch_cfg: arch.Config = .{},
 };
 
+pub const VmConsoleConfig = struct {
+    input: ?std.Io.File = null,
+    output: std.Io.File,
+    configure_terminal: bool = false,
+};
+
 pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
-    io_bus: arch.io_bus = .{},
-    mmio_bus: arch.mmio_bus = .{},
+    device_bus: arch.DeviceBus = .{},
     io: std.Io,
     allocator: std.mem.Allocator,
     config: VmConfig,
@@ -97,10 +102,12 @@ pub const Vm = struct {
         };
         errdefer self.epoll.deinit();
 
-        try self.io_bus.init(self);
-
         _ = try self.create_vcpu(img.ep, 0, io, allocator);
         return self;
+    }
+
+    pub fn attach_console(self: *Self, console: VmConsoleConfig) !void {
+        try self.device_bus.attach_console(&console, self);
     }
 
     pub fn irq_set(self: *Self, num: u32, set: bool) !void {
@@ -113,7 +120,7 @@ pub const Vm = struct {
                 cpu.deinit(alloc);
         }
 
-        self.io_bus.deinit();
+        self.device_bus.deinit();
         self.vm.deinit();
         self.memory.deinit(alloc);
         alloc.destroy(self);
@@ -198,7 +205,7 @@ pub const Vm = struct {
                         }
                     },
                     .io_bus => {
-                        try self.io_bus.handle_event(token.id, self, io);
+                        try self.device_bus.handle_event(token.id, self, io);
                     },
                 }
             }
@@ -236,8 +243,9 @@ test "guest port write reaches COM1 UART" {
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
-    vm.io_bus.com1.out = uart_output.file;
-    defer vm.io_bus.com1.out = std.Io.File.stdout();
+    try vm.attach_console(.{
+        .output = uart_output.file,
+    });
 
     try vm.run(io);
 
@@ -264,8 +272,9 @@ test "linux reaches shutdown" {
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
-    vm.io_bus.com1.out = uart_output.file;
-    defer vm.io_bus.com1.out = std.Io.File.stdout();
+    try vm.attach_console(.{
+        .output = uart_output.file,
+    });
 
     try vm.run(io);
 }
@@ -329,8 +338,9 @@ test "linux reaches console" {
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
-    vm.io_bus.com1.out = uart_output.file;
-    defer vm.io_bus.com1.out = std.Io.File.stdout();
+    try vm.attach_console(.{
+        .output = uart_output.file,
+    });
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
     try wait_for_output(&uart_output, "login");

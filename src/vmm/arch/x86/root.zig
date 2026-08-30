@@ -4,10 +4,13 @@ const std = @import("std");
 const kvm = @import("kvm");
 const GuestMemory = @import("../../memory.zig").GuestMemory;
 const VmConfig = @import("../../root.zig").VmConfig;
+const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
+const Vm = @import("../../root.zig").Vm;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const gdt = @import("gdt.zig");
 const paging = @import("paging.zig");
+const IoResult = @import("kvm").IoResult;
 
 pub const layout = @import("layout.zig");
 
@@ -30,6 +33,33 @@ pub const io_bus = @import("io_bus.zig");
 pub const mmio_bus = @import("mmio_bus.zig");
 
 pub const Config = struct {};
+
+pub const DeviceBus = struct {
+    io_bus: io_bus = .{},
+    mmio_bus: mmio_bus = .{},
+
+    const Self = @This();
+
+    pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
+        try self.io_bus.attach_console(console, vm);
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.io_bus.deinit();
+    }
+
+    pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
+        try self.io_bus.handle_event(id, vm, io);
+    }
+
+    pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
+        return self.io_bus.handle_io(io_request, vm, io);
+    }
+
+    pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
+        return self.mmio_bus.handle_mmio(mmio_request, io);
+    }
+};
 
 pub fn setup_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
     {
