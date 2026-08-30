@@ -227,8 +227,13 @@ pub const Vm = struct {
 };
 
 test "guest port write reaches COM1 UART" {
+    _ = try kvm_system.get();
+
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
         "test_bins/64bit_guest.bin",
@@ -255,8 +260,13 @@ test "guest port write reaches COM1 UART" {
 }
 
 test "linux reaches shutdown" {
+    _ = try kvm_system.get();
+
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
         "test_bins/bzImage",
@@ -313,8 +323,13 @@ fn vm_run_thread(vm: *Vm, io: std.Io) !void {
 }
 
 test "linux login and reboot" {
+    _ = try kvm_system.get();
+
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
         "test_bins/bzImage",
@@ -380,8 +395,13 @@ test "linux login and reboot" {
 }
 
 test "linux reaches console" {
+    _ = try kvm_system.get();
+
     const io = std.testing.io;
     const allocator = std.testing.allocator;
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
     const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
         io,
         "test_bins/bzImage",
