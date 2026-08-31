@@ -78,6 +78,7 @@ pub const Vm = struct {
     memory: memory.GuestMemory,
     epoll: Epoll,
     state: VmState = .{},
+    old_sigaction: posix.Sigaction,
 
     const Self = @This();
 
@@ -101,19 +102,21 @@ pub const Vm = struct {
             try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
         }
 
+        const old = Self.setup_sighandler();
+        errdefer Self.restore_sighandler(old);
+
         self.* = .{
             .vm = vm,
             .memory = mem,
             .io = io,
             .config = config,
             .epoll = try Epoll.new(),
+            .old_sigaction = old,
         };
         errdefer self.epoll.deinit();
 
         _ = try self.create_vcpu(img.ep, 0, io, allocator);
 
-        // TODO: maybe remove it?
-        Self.setup_sighandler();
         return self;
     }
 
@@ -141,6 +144,7 @@ pub const Vm = struct {
         self.device_bus.deinit();
         self.vm.deinit();
         self.memory.deinit(alloc);
+        Self.restore_sighandler(self.old_sigaction);
         alloc.destroy(self);
     }
 
@@ -163,14 +167,20 @@ pub const Vm = struct {
 
     fn wake_handler(_: std.posix.SIG) callconv(.c) void {}
 
-    fn setup_sighandler() void {
+    fn restore_sighandler(sa: std.posix.Sigaction) void {
+        std.posix.sigaction(.USR1, &sa, null);
+    }
+
+    fn setup_sighandler() std.posix.Sigaction {
+        var old: std.posix.Sigaction = undefined;
         const action = std.posix.Sigaction{
             .handler = .{ .handler = @alignCast(&wake_handler) },
             .mask = std.posix.sigemptyset(),
-            .flags = 0, // no SA_RESTART
+            .flags = 0,
         };
 
-        std.posix.sigaction(.USR1, &action, null);
+        std.posix.sigaction(.USR1, &action, &old);
+        return old;
     }
 
     pub fn stop(self: *Vm) !void {
@@ -260,6 +270,43 @@ pub const Vm = struct {
         self.state.state.store(.Stopped, .monotonic);
     }
 };
+
+var Called: usize = 0;
+
+fn old_handler(_: std.posix.SIG) callconv(.c) void {
+    Called += 1;
+}
+
+test "Vm restores sigaction" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/64bit_guest.bin",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+
+    const action = std.posix.Sigaction{
+        .handler = .{ .handler = @alignCast(&old_handler) },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0, // no SA_RESTART
+    };
+
+    std.posix.sigaction(.USR1, &action, null);
+
+    var vm = try Vm.new(.{
+        .ram_size = 0x20000,
+        .binary = binary_bytes,
+    }, io, allocator);
+    vm.deinit(allocator, io);
+
+    _ = std.c.pthread_kill(std.c.pthread_self(), .USR1);
+    try std.testing.expectEqual(1, Called);
+}
 
 test "Cannot attach two consoles" {
     _ = try kvm_system.get();
