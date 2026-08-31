@@ -125,6 +125,9 @@ pub const Vm = struct {
         if (self.state.console_attached)
             return error.ConsoleAlreadyAttached;
 
+        if (self.state.state.load(.monotonic) != .Initialized)
+            return error.InvalidState;
+
         try self.device_bus.attach_console(&console, self);
         self.state.console_attached = true;
     }
@@ -308,32 +311,67 @@ test "Vm restores sigaction" {
     try std.testing.expectEqual(1, Called);
 }
 
-test "Cannot attach two consoles" {
+fn vm_run_thread(vm: *Vm, io: std.Io) !void {
+    try vm.run(io);
+}
+
+test "Console attach" {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
     const allocator = std.testing.allocator;
-    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
-        io,
-        "test_bins/64bit_guest.bin",
-        allocator,
-        .unlimited,
-    );
-    defer allocator.free(binary_bytes);
 
-    var vm = try Vm.new(.{
-        .ram_size = 0x20000,
-        .binary = binary_bytes,
-    }, io, allocator);
-    defer vm.deinit(allocator, io);
+    {
+        const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            "test_bins/64bit_guest.bin",
+            allocator,
+            .unlimited,
+        );
+        defer allocator.free(binary_bytes);
 
-    try vm.attach_console(.{
-        .output = std.Io.File.stdout(),
-    });
+        var vm = try Vm.new(.{
+            .ram_size = 0x20000,
+            .binary = binary_bytes,
+        }, io, allocator);
+        defer vm.deinit(allocator, io);
 
-    try std.testing.expectError(error.ConsoleAlreadyAttached, vm.attach_console(.{
-        .output = std.Io.File.stdout(),
-    }));
+        try vm.attach_console(.{
+            .output = std.Io.File.stdout(),
+        });
+
+        try std.testing.expectError(error.ConsoleAlreadyAttached, vm.attach_console(.{
+            .output = std.Io.File.stdout(),
+        }));
+    }
+
+    {
+        const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            "test_bins/64bit_loop.bin",
+            allocator,
+            .unlimited,
+        );
+        defer allocator.free(binary_bytes);
+
+        var vm = try Vm.new(.{
+            .ram_size = 0x20000,
+            .binary = binary_bytes,
+        }, io, allocator);
+        defer vm.deinit(allocator, io);
+
+        const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
+
+        // Busy loop until vm starts...
+        while (vm.state.state.load(.monotonic) != .Running) {}
+
+        try std.testing.expectError(error.InvalidState, vm.attach_console(.{
+            .output = std.Io.File.stdout(),
+        }));
+
+        try vm.stop();
+        thread.join();
+    }
 }
 
 test "Cannot run vm two times" {
@@ -357,10 +395,6 @@ test "Cannot run vm two times" {
 
     try vm.run(io);
     try std.testing.expectError(error.AlreadyStarted, vm.run(io));
-}
-
-fn vm_run_thread(vm: *Vm, io: std.Io) !void {
-    try vm.run(io);
 }
 
 test "Cannot stop vm two times" {
