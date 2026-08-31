@@ -72,7 +72,8 @@ pub const VCpu = struct {
         _ = std.c.pthread_kill(self.thread.getHandle(), .USR1);
     }
 
-    pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+        self.start_event.set(io);
         self.stop();
         self.thread.join();
         self.eventfd.deinit();

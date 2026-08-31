@@ -58,16 +58,26 @@ pub const VmConsoleConfig = struct {
     configure_terminal: bool = false,
 };
 
+const VmStateKind = enum(u8) {
+    Initialized,
+    Running,
+    Stopped,
+};
+
+const VmState = struct {
+    state: std.atomic.Value(VmStateKind) = std.atomic.Value(VmStateKind).init(.Initialized),
+    console_attached: bool = false,
+};
+
 pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
     device_bus: arch.DeviceBus = .{},
     io: std.Io,
-    allocator: std.mem.Allocator,
     config: VmConfig,
     memory: memory.GuestMemory,
-    stop: StopFlag = StopFlag.init(false),
     epoll: Epoll,
+    state: VmState = .{},
 
     const Self = @This();
 
@@ -95,28 +105,35 @@ pub const Vm = struct {
             .vm = vm,
             .memory = mem,
             .io = io,
-            .allocator = allocator,
             .config = config,
             .epoll = try Epoll.new(),
         };
         errdefer self.epoll.deinit();
 
         _ = try self.create_vcpu(img.ep, 0, io, allocator);
+
+        // TODO: maybe remove it?
+        Self.setup_sighandler();
         return self;
     }
 
+    // thread-unsafe
     pub fn attach_console(self: *Self, console: VmConsoleConfig) !void {
+        if (self.state.console_attached)
+            return error.ConsoleAlreadyAttached;
+
         try self.device_bus.attach_console(&console, self);
+        self.state.console_attached = true;
     }
 
     pub fn irq_set(self: *Self, num: u32, set: bool) !void {
         try self.vm.irq_set(num, set);
     }
 
-    pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         for (self.vcpus) |vcpu| {
             if (vcpu) |cpu|
-                cpu.deinit(alloc);
+                cpu.deinit(alloc, io);
         }
 
         try arch.deinit_vm(&self.memory, &self.config);
@@ -156,7 +173,16 @@ pub const Vm = struct {
         std.posix.sigaction(.USR1, &action, null);
     }
 
-    pub fn ask_stop(self: *Vm) void {
+    pub fn stop(self: *Vm) !void {
+        if (self.state.state.cmpxchgStrong(
+            .Running,
+            .Stopped,
+            .monotonic,
+            .monotonic,
+        ) != null) {
+            return error.InvalidState;
+        }
+
         for (self.vcpus) |vcpu| {
             if (vcpu) |cpu|
                 cpu.stop();
@@ -174,7 +200,14 @@ pub const Vm = struct {
     }
 
     pub fn run(self: *Self, io: std.Io) !void {
-        Self.setup_sighandler();
+        if (self.state.state.cmpxchgStrong(
+            .Initialized,
+            .Running,
+            .monotonic,
+            .monotonic,
+        ) != null) {
+            return error.AlreadyStarted;
+        }
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {
@@ -223,8 +256,118 @@ pub const Vm = struct {
                 break;
             }
         }
+
+        self.state.state.store(.Stopped, .monotonic);
     }
 };
+
+test "Cannot attach two consoles" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/64bit_guest.bin",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+
+    var vm = try Vm.new(.{
+        .ram_size = 0x20000,
+        .binary = binary_bytes,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
+
+    try vm.attach_console(.{
+        .output = std.Io.File.stdout(),
+    });
+
+    try std.testing.expectError(error.ConsoleAlreadyAttached, vm.attach_console(.{
+        .output = std.Io.File.stdout(),
+    }));
+}
+
+test "Cannot run vm two times" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/64bit_guest.bin",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+
+    var vm = try Vm.new(.{
+        .ram_size = 0x20000,
+        .binary = binary_bytes,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
+
+    try vm.run(io);
+    try std.testing.expectError(error.AlreadyStarted, vm.run(io));
+}
+
+fn vm_run_thread(vm: *Vm, io: std.Io) !void {
+    try vm.run(io);
+}
+
+test "Cannot stop vm two times" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    {
+        const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            "test_bins/64bit_guest.bin",
+            allocator,
+            .unlimited,
+        );
+        defer allocator.free(binary_bytes);
+
+        var vm = try Vm.new(.{
+            .ram_size = 0x20000,
+            .binary = binary_bytes,
+        }, io, allocator);
+        defer vm.deinit(allocator, io);
+
+        try std.testing.expectError(error.InvalidState, vm.stop());
+        try vm.run(io);
+        try std.testing.expectError(error.InvalidState, vm.stop());
+    }
+
+    {
+        const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            "test_bins/64bit_loop.bin",
+            allocator,
+            .unlimited,
+        );
+        defer allocator.free(binary_bytes);
+
+        var vm = try Vm.new(.{
+            .ram_size = 0x20000,
+            .binary = binary_bytes,
+        }, io, allocator);
+        defer vm.deinit(allocator, io);
+
+        const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
+
+        // Busy loop until vm starts...
+        while (vm.state.state.load(.monotonic) != .Running) {}
+
+        try vm.stop();
+        try std.testing.expectError(error.InvalidState, vm.stop());
+
+        thread.join();
+    }
+}
 
 test "guest port write reaches COM1 UART" {
     _ = try kvm_system.get();
@@ -249,7 +392,7 @@ test "guest port write reaches COM1 UART" {
         .ram_size = 0x20000,
         .binary = binary_bytes,
     }, io, allocator);
-    defer vm.deinit(allocator);
+    defer vm.deinit(allocator, io);
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
@@ -287,7 +430,7 @@ test "linux reaches shutdown" {
         .ram_size = 1 << 30,
         .binary = binary_bytes,
     }, io, allocator);
-    defer vm.deinit(allocator);
+    defer vm.deinit(allocator, io);
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
@@ -326,10 +469,6 @@ fn wait_for_output(
     return error.Timeout;
 }
 
-fn vm_run_thread(vm: *Vm, io: std.Io) !void {
-    try vm.run(io);
-}
-
 test "linux login and reboot" {
     _ = try kvm_system.get();
 
@@ -362,7 +501,7 @@ test "linux login and reboot" {
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
     }, io, allocator);
-    defer vm.deinit(allocator);
+    defer vm.deinit(allocator, io);
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
@@ -438,7 +577,7 @@ test "linux reaches console" {
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
     }, io, allocator);
-    defer vm.deinit(allocator);
+    defer vm.deinit(allocator, io);
 
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
@@ -450,7 +589,7 @@ test "linux reaches console" {
     try wait_for_output(&uart_output, "login");
 
     // Stop the vm
-    vm.ask_stop();
+    try vm.stop();
     thread.join();
 }
 
