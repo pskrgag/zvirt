@@ -48,8 +48,8 @@ pub const VmConfig = struct {
     // Initramfs
     initramfs: ?[]const u8 = null,
 
-    // Arch config
-    arch_cfg: arch.Config = .{},
+    // Block device (path to the image)
+    block_device: []const u8 = "",
 };
 
 pub const VmConsoleConfig = struct {
@@ -72,7 +72,7 @@ const VmState = struct {
 pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
-    device_bus: arch.DeviceBus = .{},
+    device_bus: arch.DeviceBus,
     io: std.Io,
     config: VmConfig,
     memory: memory.GuestMemory,
@@ -91,6 +91,11 @@ pub const Vm = struct {
         errdefer vm.deinit();
 
         try vm.create_irqchip();
+
+        var device_bus = try arch.DeviceBus.new(allocator);
+        errdefer device_bus.deinit(allocator);
+
+        device_bus.init(&config);
 
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
@@ -112,6 +117,7 @@ pub const Vm = struct {
             .config = config,
             .epoll = try Epoll.new(),
             .old_sigaction = old,
+            .device_bus = device_bus,
         };
         errdefer self.epoll.deinit();
 
@@ -144,7 +150,7 @@ pub const Vm = struct {
 
         try arch.deinit_vm(&self.memory, &self.config);
         self.epoll.deinit();
-        self.device_bus.deinit();
+        self.device_bus.deinit(alloc);
         self.vm.deinit();
         self.memory.deinit(alloc);
         Self.restore_sighandler(self.old_sigaction);
@@ -212,7 +218,7 @@ pub const Vm = struct {
         try self.epoll.add(fd, @bitCast(token));
     }
 
-    pub fn run(self: *Self, io: std.Io) !void {
+    pub fn run(self: *Self, alloc: std.mem.Allocator, io: std.Io) !void {
         if (self.state.state.cmpxchgStrong(
             .Initialized,
             .Running,
@@ -221,6 +227,8 @@ pub const Vm = struct {
         ) != null) {
             return error.AlreadyStarted;
         }
+
+        try arch.vm_prerun(&self.memory, &self.device_bus, alloc);
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {
@@ -311,8 +319,8 @@ test "Vm restores sigaction" {
     try std.testing.expectEqual(1, Called);
 }
 
-fn vm_run_thread(vm: *Vm, io: std.Io) !void {
-    try vm.run(io);
+fn vm_run_thread(vm: *Vm, allocator: std.mem.Allocator, io: std.Io) !void {
+    try vm.run(allocator, io);
 }
 
 test "Console attach" {
@@ -393,8 +401,8 @@ test "Cannot run vm two times" {
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
-    try vm.run(io);
-    try std.testing.expectError(error.AlreadyStarted, vm.run(io));
+    try vm.run(allocator, io);
+    try std.testing.expectError(error.AlreadyStarted, vm.run(allocator, io));
 }
 
 test "Cannot stop vm two times" {
@@ -419,7 +427,7 @@ test "Cannot stop vm two times" {
         defer vm.deinit(allocator, io);
 
         try std.testing.expectError(error.InvalidState, vm.stop());
-        try vm.run(io);
+        try vm.run(allocator, io);
         try std.testing.expectError(error.InvalidState, vm.stop());
     }
 
@@ -481,7 +489,7 @@ test "guest port write reaches COM1 UART" {
         .output = uart_output.file,
     });
 
-    try vm.run(io);
+    try vm.run(allocator, io);
 
     var captured: [16]u8 = undefined;
     try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
@@ -519,7 +527,7 @@ test "linux reaches shutdown" {
         .output = uart_output.file,
     });
 
-    try vm.run(io);
+    try vm.run(allocator, io);
 }
 
 fn wait_for_output(

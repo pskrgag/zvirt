@@ -1,6 +1,7 @@
 //! Guest physical-address layout used during x86 boot.
 
 const VmConfig = @import("../../root.zig").VmConfig;
+const std = @import("std");
 
 pub const PGD_ADDR = 0x1000;
 pub const PUD_ADDR = 0x2000;
@@ -24,6 +25,12 @@ pub const MemorySlot = struct {
         Reserved = E820_RESERVED,
     },
 };
+
+pub fn virtio_device(config: *const VmConfig, idx: u64) u64 {
+    const ram_end = std.mem.alignForward(u64, HIGH_RAM_BEGIN + config.ram_size, 4096);
+
+    return ram_end + idx * 4096;
+}
 
 pub fn memory_layout(config: *const VmConfig) [3]MemorySlot {
     return [3]MemorySlot{

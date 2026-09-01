@@ -15,7 +15,11 @@ pub const Image = struct {
     load_address: u64,
 };
 
-pub fn parse(data: []const u8, memory: *GuestMemory, config: *const VmConfig) !Image {
+pub fn parse(
+    data: []const u8,
+    memory: *GuestMemory,
+    config: *const VmConfig,
+) !Image {
     return bzimage.parse(data, memory, config) catch {
         try memory.write(arch.layout.DEFAULT_LOAD_ADDRESS, data);
 

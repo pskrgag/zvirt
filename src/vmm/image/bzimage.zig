@@ -49,7 +49,11 @@ fn fill_e820(params: *BootParams, config: *const VmConfig) void {
     params.e820_entries = @intCast(layout.len);
 }
 
-pub fn parse(data: []const u8, memory: *GuestMemory, config: *const VmConfig) !Image {
+pub fn parse(
+    data: []const u8,
+    memory: *GuestMemory,
+    config: *const VmConfig,
+) !Image {
     var boot_params = BootParams{};
 
     if (data.len < MINIMAL_SIZE)
@@ -126,11 +130,6 @@ pub fn parse(data: []const u8, memory: *GuestMemory, config: *const VmConfig) !I
     // NOTE: linux needs type_of_loader to be set for initramfs. Not sure why...
     boot_params.hdr.type_of_loader = 0xff;
 
-    const zig_slice = std.mem.span(
-        @as([*:0]const u8, @ptrCast(DEFAULT_CMD_LINE)),
-    );
-
-    try memory.write(arch.layout.BOOT_CMDLINE_ADDR, zig_slice);
     try memory.write(arch.layout.BOOT_PARAM_ADDR, std.mem.asBytes(&boot_params));
     try memory.write(arch.layout.HIGH_RAM_BEGIN, data[kernel_offset..]);
 

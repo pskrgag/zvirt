@@ -9,6 +9,7 @@ var config = struct {
     kernel: []const u8 = "",
     memory: []const u8 = "",
     initramfs: []const u8 = "",
+    block_device: []const u8 = "",
     io: ?std.Io = null,
     allocator: ?std.mem.Allocator = null,
 }{};
@@ -38,6 +39,10 @@ pub fn main(init: std.process.Init) !void {
                 .long_name = "initramfs",
                 .help = "initramfs image",
                 .value_ref = runner.mkRef(&config.initramfs),
+            }, .{
+                .long_name = "drive",
+                .help = "fs image",
+                .value_ref = runner.mkRef(&config.block_device),
             } }),
             .target = .{ .action = .{ .exec = run } },
         },
@@ -91,13 +96,14 @@ fn run() !void {
         .ram_size = memory_size,
         .binary = kernel_bytes,
         .initramfs = initramfs,
+        .block_device = config.block_device,
     }, io, allocator);
-    defer vm.deinit(allocator);
+    defer vm.deinit(allocator, io);
 
     try vm.attach_console(.{
         .input = std.Io.File.stdin(),
         .output = std.Io.File.stdout(),
         .configure_terminal = true,
     });
-    try vm.run(io);
+    try vm.run(allocator, io);
 }

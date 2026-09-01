@@ -4,16 +4,16 @@ const std = @import("std");
 const kvm = @import("kvm");
 const GuestMemory = @import("../../memory.zig").GuestMemory;
 const VmConfig = @import("../../root.zig").VmConfig;
-const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const Vm = @import("../../root.zig").Vm;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const gdt = @import("gdt.zig");
 const paging = @import("paging.zig");
-const IoResult = @import("kvm").IoResult;
 const mmap = @import("test_utils").mmap;
 
+pub const DeviceBus = @import("device_bus.zig");
 pub const layout = @import("layout.zig");
+const DEFAULT_CMD_LINE: []const u8 = "console=ttyS0 earlycon=uart,io,0x3f8 nokaslr pci=off panic=-1 reboot=t";
 
 // Long-mode enable
 const EFER_LME = 1 << 8;
@@ -29,38 +29,6 @@ const CR0_PE = 1 << 0;
 
 // Enable paging
 const CR4_PAE = 1 << 5;
-
-pub const io_bus = @import("io_bus.zig");
-pub const mmio_bus = @import("mmio_bus.zig");
-
-pub const Config = struct {};
-
-pub const DeviceBus = struct {
-    io_bus: io_bus = .{},
-    mmio_bus: mmio_bus = .{},
-
-    const Self = @This();
-
-    pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
-        try self.io_bus.attach_console(console, vm);
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.io_bus.deinit();
-    }
-
-    pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
-        try self.io_bus.handle_event(id, vm, io);
-    }
-
-    pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
-        return self.io_bus.handle_io(io_request, vm, io);
-    }
-
-    pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
-        return self.mmio_bus.handle_mmio(mmio_request, io);
-    }
-};
 
 pub fn setup_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
     {
@@ -107,6 +75,25 @@ pub fn setup_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
 pub fn setup_vm(vm: *kvm.Vm, memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
     try vm.create_pit();
     try setup_memory(memory, config, alloc);
+}
+
+pub fn vm_prerun(memory: *GuestMemory, bus: *DeviceBus, alloc: Allocator) !void {
+    var cmd_line = try std.fmt.allocPrint(alloc, "{s}", .{DEFAULT_CMD_LINE});
+    errdefer alloc.free(cmd_line);
+
+    for (bus.mmio_bus.virtio_devs.items) |dev| {
+        const new_cmd_line = try std.fmt.allocPrint(
+            alloc,
+            "{s} virtio_mmio.device=4K@0x{x}:{d}",
+            .{ cmd_line, dev.base(), dev.irq() },
+        );
+
+        std.debug.print("{}\n", .{dev.irq()});
+        alloc.free(cmd_line);
+        cmd_line = new_cmd_line;
+    }
+
+    try memory.write(layout.BOOT_CMDLINE_ADDR, cmd_line);
 }
 
 pub fn deinit_vm(memory: *GuestMemory, config: *const VmConfig) !void {
