@@ -14,6 +14,13 @@ pub const MemoryRegion = struct {
         return addr >= self.gpa and addr < self.gpa + self.raw.len;
     }
 
+    fn contains_range(self: *MemoryRegion, addr: GuestPhysicalAddress, size: usize) bool {
+        const start = addr;
+        const end = addr + size;
+
+        return start >= self.gpa and end < self.gpa + self.raw.len;
+    }
+
     fn write(self: *MemoryRegion, addr: GuestPhysicalAddress, data: []const u8) ?usize {
         if (!self.contains(addr))
             return null;
@@ -32,11 +39,15 @@ pub const GuestMemory = struct {
 
     const Self = @This();
 
-    pub fn new(alloc: Allocator) !Self {
-        return .{
+    pub fn new(alloc: Allocator) !*Self {
+        const self = try alloc.create(Self);
+
+        self.* = Self{
             .regions = try std.ArrayList(MemoryRegion).initCapacity(alloc, 0),
             .slot = 0,
         };
+
+        return self;
     }
 
     pub fn add(self: *Self, gpa: GuestPhysicalAddress, mem: []u8, alloc: Allocator) !void {
@@ -48,6 +59,19 @@ pub const GuestMemory = struct {
 
     pub fn deinit(self: *Self, alloc: Allocator) void {
         self.regions.deinit(alloc);
+        alloc.destroy(self);
+    }
+
+    pub fn as_slice(self: *Self, pa: GuestPhysicalAddress, size: usize) ?[]u8 {
+        for (self.regions.items) |*reg| {
+            if (reg.contains_range(pa, size)) {
+                const offset = pa - reg.gpa;
+
+                return reg.raw[offset .. offset + size];
+            }
+        }
+
+        return null;
     }
 
     pub fn write(self: *Self, gpa: GuestPhysicalAddress, data: []const u8) !void {

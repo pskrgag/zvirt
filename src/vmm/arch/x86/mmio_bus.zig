@@ -13,8 +13,6 @@ buffer: [MAX_DEVICES]VirtioDevice,
 virtio_devs: std.ArrayList(VirtioDevice),
 
 pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
-    _ = io;
-
     // std.debug.print("trying {any}\n", .{mmio_request});
     switch (mmio_request.pa) {
         0xa0000...0xbffff,
@@ -34,7 +32,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
 
                         return IoResult{ .Mmio = .{ .data = res } };
                     } else {
-                        dev.handle_write(@truncate(offset), @truncate(mmio_request.data));
+                        try dev.handle_write(@truncate(offset), @truncate(mmio_request.data), io);
                         return null;
                     }
                 }
@@ -46,7 +44,11 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     }
 }
 
-pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
+pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+    for (self.virtio_devs.items) |*dev| {
+        dev.deinit(io);
+    }
+
     alloc.destroy(self);
 }
 

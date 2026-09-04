@@ -75,7 +75,7 @@ pub const Vm = struct {
     device_bus: arch.DeviceBus,
     io: std.Io,
     config: VmConfig,
-    memory: memory.GuestMemory,
+    memory: *memory.GuestMemory,
     epoll: Epoll,
     state: VmState = .{},
     old_sigaction: posix.Sigaction,
@@ -92,16 +92,14 @@ pub const Vm = struct {
 
         try vm.create_irqchip();
 
-        var device_bus = try arch.DeviceBus.new(allocator);
-        errdefer device_bus.deinit(allocator);
-
-        device_bus.init(&config);
-
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
 
-        try arch.setup_vm(&vm, &mem, &config, allocator);
-        const img = try image.parse(config.binary, &mem, &config);
+        var device_bus = try arch.DeviceBus.new(allocator);
+        errdefer device_bus.deinit(allocator, io);
+
+        try arch.setup_vm(&vm, mem, &config, allocator);
+        const img = try image.parse(config.binary, mem, &config);
 
         for (mem.regions.items) |reg| {
             try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
@@ -121,6 +119,7 @@ pub const Vm = struct {
         };
         errdefer self.epoll.deinit();
 
+        try self.device_bus.init(&config, self, allocator, io);
         _ = try self.create_vcpu(img.ep, 0, io, allocator);
 
         return self;
@@ -148,9 +147,9 @@ pub const Vm = struct {
                 cpu.deinit(alloc, io);
         }
 
-        try arch.deinit_vm(&self.memory, &self.config);
+        try arch.deinit_vm(self.memory, &self.config);
         self.epoll.deinit();
-        self.device_bus.deinit(alloc);
+        self.device_bus.deinit(alloc, io);
         self.vm.deinit();
         self.memory.deinit(alloc);
         Self.restore_sighandler(self.old_sigaction);
@@ -228,7 +227,7 @@ pub const Vm = struct {
             return error.AlreadyStarted;
         }
 
-        try arch.vm_prerun(&self.memory, &self.device_bus, alloc);
+        try arch.vm_prerun(self.memory, &self.device_bus, alloc);
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {

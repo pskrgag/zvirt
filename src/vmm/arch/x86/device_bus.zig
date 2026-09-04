@@ -20,8 +20,8 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
     try self.io_bus.attach_console(console, vm);
 }
 
-pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
-    self.mmio_bus.deinit(alloc);
+pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+    self.mmio_bus.deinit(alloc, io);
     self.io_bus.deinit();
 }
 
@@ -41,10 +41,12 @@ pub fn new(alloc: std.mem.Allocator) !Self {
     return .{ .mmio_bus = try mmio_bus_struct.new(alloc) };
 }
 
-pub fn init(self: *Self, config: *const VmConfig) void {
+pub fn init(self: *Self, config: *const VmConfig, vm: *Vm, alloc: std.mem.Allocator, io: std.Io) !void {
     if (config.block_device.len != 0) {
         const base = layout.virtio_device(config, 0);
 
-        self.mmio_bus.register_device(VirtioDevice.new(base, VirtioDevice.DeviceType.BlockDevice));
+        self.mmio_bus.register_device(
+            try VirtioDevice.new(base, .{ .BlockDevice = config.block_device }, vm, alloc, io),
+        );
     }
 }
