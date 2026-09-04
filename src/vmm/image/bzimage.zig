@@ -35,7 +35,7 @@ const MAGIC = 0x53726448;
 const SUPPORTED_VERSION = 0x20f;
 
 const MINIMAL_SIZE = SETUP_HEADER_OFFSET + @bitSizeOf(SetupHeader) / 8;
-const DEFAULT_CMD_LINE: [*:0]const u8 = "console=ttyS0 earlycon=uart,io,0x3f8 nokaslr pci=off panic=-1 reboot=t";
+const DEFAULT_CMD_LINE: []const u8 = "console=ttyS0 earlycon=uart,io,0x3f8 nokaslr pci=off panic=-1 reboot=t";
 
 fn fill_e820(params: *BootParams, config: *const VmConfig) void {
     const layout = arch.layout.memory_layout(config);

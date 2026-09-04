@@ -51,7 +51,7 @@ pub const Block = struct {
     }
 
     pub fn features() u32 {
-        return VIRTIO_BLK_F_RO;
+        return 0;
     }
 
     pub fn proccess_requests(self: *Self, reqs: []queue.RequestChain, io: std.Io) !void {
@@ -79,21 +79,47 @@ pub const Block = struct {
             return error.InvalidFormat;
         };
 
-        const to_write = requests[1].as_rw() orelse {
-            std.debug.print("not writable second descr\n", .{});
-            status[0] = VIRTIO_BLK_S_IOERR;
-            return error.InvalidFormat;
-        };
+        switch (blkreq.kind) {
+            .Read => {
+                const to_write = requests[1].as_rw() orelse {
+                    std.debug.print("not writable second descr\n", .{});
+                    status[0] = VIRTIO_BLK_S_IOERR;
+                    return error.InvalidFormat;
+                };
 
-        const len = self.file.readPositionalAll(io, to_write, blkreq.sector * 512) catch {
-            status[0] = VIRTIO_BLK_S_IOERR;
-            return 0;
-        };
+                const len = self.file.readPositionalAll(io, to_write, blkreq.sector * 512) catch {
+                    status[0] = VIRTIO_BLK_S_IOERR;
+                    return 0;
+                };
 
-        status[0] = VIRTIO_BLK_S_OK;
+                status[0] = VIRTIO_BLK_S_OK;
 
-        // Account for status write
-        return @truncate(len + 1);
+                // Account for status write
+                return @truncate(len + 1);
+            },
+            .Write => {
+                const to_read = requests[1].as_ro();
+
+                _ = self.file.writePositionalAll(io, to_read, blkreq.sector * 512) catch {
+                    status[0] = VIRTIO_BLK_S_IOERR;
+                    return 0;
+                };
+
+                status[0] = VIRTIO_BLK_S_OK;
+
+                // Account for status write
+                return @truncate(to_read.len + 1);
+            },
+            .Flush => {
+                self.file.sync(io) catch {
+                    status[0] = VIRTIO_BLK_S_IOERR;
+                    return 1;
+                };
+
+                status[0] = VIRTIO_BLK_S_OK;
+                return 1;
+            },
+        }
     }
 
     pub fn read_config(self: *Self, offset: u32) u32 {
