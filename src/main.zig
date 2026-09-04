@@ -10,6 +10,7 @@ var config = struct {
     memory: []const u8 = "",
     initramfs: []const u8 = "",
     block_device: []const u8 = "",
+    cmdline: []const u8 = "",
     io: ?std.Io = null,
     allocator: ?std.mem.Allocator = null,
 }{};
@@ -43,6 +44,10 @@ pub fn main(init: std.process.Init) !void {
                 .long_name = "drive",
                 .help = "fs image",
                 .value_ref = runner.mkRef(&config.block_device),
+            }, .{
+                .long_name = "cmdline",
+                .help = "command line",
+                .value_ref = runner.mkRef(&config.cmdline),
             } }),
             .target = .{ .action = .{ .exec = run } },
         },
@@ -97,6 +102,7 @@ fn run() !void {
         .binary = kernel_bytes,
         .initramfs = initramfs,
         .block_device = config.block_device,
+        .cmdline = config.cmdline,
     }, io, allocator);
     defer vm.deinit(allocator, io);
 

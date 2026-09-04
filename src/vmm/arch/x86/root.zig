@@ -77,9 +77,17 @@ pub fn setup_vm(vm: *kvm.Vm, memory: *GuestMemory, config: *const VmConfig, allo
     try setup_memory(memory, config, alloc);
 }
 
-pub fn vm_prerun(memory: *GuestMemory, bus: *DeviceBus, alloc: Allocator) !void {
-    var cmd_line = try std.fmt.allocPrint(alloc, "{s}", .{DEFAULT_CMD_LINE});
-    errdefer alloc.free(cmd_line);
+pub fn vm_prerun(
+    memory: *GuestMemory,
+    bus: *DeviceBus,
+    user_cmdline: []const u8,
+    alloc: Allocator,
+) !void {
+    var cmd_line = try std.fmt.allocPrint(alloc, "{s}", .{if (user_cmdline.len != 0)
+        user_cmdline
+    else
+        DEFAULT_CMD_LINE});
+    defer alloc.free(cmd_line);
 
     for (bus.mmio_bus.virtio_devs.items) |dev| {
         const new_cmd_line = try std.fmt.allocPrint(
@@ -94,7 +102,6 @@ pub fn vm_prerun(memory: *GuestMemory, bus: *DeviceBus, alloc: Allocator) !void 
     }
 
     try memory.write(layout.BOOT_CMDLINE_ADDR, cmd_line);
-    alloc.free(cmd_line);
 }
 
 pub fn deinit_vm(memory: *GuestMemory, config: *const VmConfig) !void {

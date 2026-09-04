@@ -50,6 +50,9 @@ pub const VmConfig = struct {
 
     // Block device (path to the image)
     block_device: []const u8 = "",
+
+    // Kernel cmdline
+    cmdline: []const u8 = "",
 };
 
 pub const VmConsoleConfig = struct {
@@ -227,7 +230,7 @@ pub const Vm = struct {
             return error.AlreadyStarted;
         }
 
-        try arch.vm_prerun(self.memory, &self.device_bus, alloc);
+        try arch.vm_prerun(self.memory, &self.device_bus, self.config.cmdline,  alloc);
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {
