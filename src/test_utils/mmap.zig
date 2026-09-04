@@ -19,6 +19,7 @@ const Self = @This();
 
 var lock = Mutex.init;
 var entries: ?MmapEntries = null;
+var print: bool = false;
 
 pub fn mmap(
     ptr: ?[*]align(page_size_min) u8,
@@ -77,7 +78,9 @@ pub fn deinit() !void {
         entries = null;
 
         if (len != 0) {
-            std.debug.print("Mmap allocations leaked {}\n", .{len});
+            if (print)
+                std.debug.print("Mmap allocations leaked {}\n", .{len});
+
             return error.MmapLeaked;
         }
     }
@@ -93,6 +96,8 @@ test "mmap detector works" {
 
     {
         try init(allocator);
+        print = false;
+        defer print = true;
 
         const map = try mmap(
             null,
@@ -109,6 +114,8 @@ test "mmap detector works" {
 
     {
         try init(allocator);
+        print = false;
+        defer print = true;
 
         _ = try mmap(
             null,

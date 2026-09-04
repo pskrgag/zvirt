@@ -170,5 +170,5 @@ test "test Linux kernel" {
     defer mmap.munmap(ram);
 
     try mem.add(0x0, ram[0 .. 1 << 30], allocator);
-    _ = try parse(binary_bytes, &mem, &VmConfig{ .ram_size = 2 << 30, .binary = "" });
+    _ = try parse(binary_bytes, mem, &VmConfig{ .ram_size = 2 << 30, .binary = "" });
 }

@@ -94,6 +94,7 @@ pub fn vm_prerun(memory: *GuestMemory, bus: *DeviceBus, alloc: Allocator) !void 
     }
 
     try memory.write(layout.BOOT_CMDLINE_ADDR, cmd_line);
+    alloc.free(cmd_line);
 }
 
 pub fn deinit_vm(memory: *GuestMemory, config: *const VmConfig) !void {

@@ -367,7 +367,7 @@ test "Console attach" {
         }, io, allocator);
         defer vm.deinit(allocator, io);
 
-        const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
+        const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
         // Busy loop until vm starts...
         while (vm.state.state.load(.monotonic) != .Running) {}
@@ -445,7 +445,7 @@ test "Cannot stop vm two times" {
         }, io, allocator);
         defer vm.deinit(allocator, io);
 
-        const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
+        const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
         // Busy loop until vm starts...
         while (vm.state.state.load(.monotonic) != .Running) {}
@@ -618,7 +618,7 @@ test "linux login and reboot" {
         .output = uart_output.file,
     });
 
-    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
     // Login discards all input data after <enter>. So we need to push data lock-step.
     try wait_for_output(&uart_output, "login");
@@ -673,7 +673,7 @@ test "linux reaches console" {
         .output = uart_output.file,
     });
 
-    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, io });
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
     try wait_for_output(&uart_output, "login");
 
     // Stop the vm

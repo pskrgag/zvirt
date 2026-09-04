@@ -211,12 +211,130 @@ pub const VirtQueue = struct {
 
             self.last_avail_idx +%= 1;
 
-            std.debug.print("head {}\n", .{descriptor_head});
-            std.debug.print("desr {}\n", .{dring[descriptor_head]});
-
             try res.append(alloc, self.process_descriptor_chain(descriptor_head, mem, dring).?);
         }
 
         return res;
     }
 };
+
+test "kick returns a descriptor chain in descriptor order" {
+    const alloc = std.testing.allocator;
+    var ram: [4096]u8 align(16) = @splat(0);
+    const mem = try GuestMemory.new(alloc);
+    defer mem.deinit(alloc);
+    try mem.add(0, &ram, alloc);
+
+    var queue = VirtQueue{
+        .elements = 8,
+        .desc_ring = 0x100,
+        .available_ring = 0x200,
+        .used_ring = 0x300,
+    };
+
+    const descriptors = queue.descr_ring(mem).?;
+    descriptors[0] = .{
+        .address = 0x400,
+        .length = 16,
+        .flags = DESC_F_NEXT,
+        .next = 3,
+    };
+    descriptors[3] = .{
+        .address = 0x500,
+        .length = 32,
+        .flags = DESC_F_NEXT | DESC_F_WRITE,
+        .next = 5,
+    };
+    descriptors[5] = .{
+        .address = 0x600,
+        .length = 1,
+        .flags = DESC_F_WRITE,
+        .next = 0,
+    };
+
+    const available = queue.avail_ring(mem).?;
+    available.* = .{ .flags = 0, .idx = Value(u16).init(0) };
+    available.slots(queue.elements)[0] = 0;
+    available.idx.store(1, .release);
+
+    var chains = try queue.kick(mem, alloc);
+    defer chains.deinit(alloc);
+
+    try std.testing.expectEqual(@as(usize, 1), chains.items.len);
+    try std.testing.expectEqual(@as(u16, 0), chains.items[0].head);
+
+    const requests = chains.items[0].get_requests();
+    try std.testing.expectEqual(@as(usize, 3), requests.len);
+    try std.testing.expectEqual(@as(usize, 16), requests[0].len());
+    try std.testing.expect(requests[0].as_rw() == null);
+    try std.testing.expectEqual(@as(usize, 32), requests[1].as_rw().?.len);
+    try std.testing.expectEqual(@as(usize, 1), requests[2].as_rw().?.len);
+    try std.testing.expectEqual(@intFromPtr(&ram[0x400]), @intFromPtr(requests[0].as_ro().ptr));
+    try std.testing.expectEqual(@intFromPtr(&ram[0x500]), @intFromPtr(requests[1].as_ro().ptr));
+    try std.testing.expectEqual(@intFromPtr(&ram[0x600]), @intFromPtr(requests[2].as_ro().ptr));
+}
+
+test "kick consumes each available entry once" {
+    const alloc = std.testing.allocator;
+    var ram: [4096]u8 align(16) = @splat(0);
+    const mem = try GuestMemory.new(alloc);
+    defer mem.deinit(alloc);
+    try mem.add(0, &ram, alloc);
+
+    var queue = VirtQueue{
+        .elements = 8,
+        .desc_ring = 0x100,
+        .available_ring = 0x200,
+        .used_ring = 0x300,
+    };
+
+    const descriptors = queue.descr_ring(mem).?;
+    descriptors[0] = .{ .address = 0x400, .length = 4, .flags = 0, .next = 0 };
+    descriptors[1] = .{ .address = 0x500, .length = 8, .flags = 0, .next = 0 };
+
+    const available = queue.avail_ring(mem).?;
+    available.* = .{ .flags = 0, .idx = Value(u16).init(0) };
+    available.slots(queue.elements)[0] = 0;
+    available.slots(queue.elements)[1] = 1;
+    available.idx.store(2, .release);
+
+    var first = try queue.kick(mem, alloc);
+    defer first.deinit(alloc);
+    try std.testing.expectEqual(@as(usize, 2), first.items.len);
+    try std.testing.expectEqual(@as(u16, 0), first.items[0].head);
+    try std.testing.expectEqual(@as(u16, 1), first.items[1].head);
+    try std.testing.expectEqual(@as(usize, 2), queue.last_avail_idx);
+
+    var second = try queue.kick(mem, alloc);
+    defer second.deinit(alloc);
+    try std.testing.expectEqual(@as(usize, 0), second.items.len);
+}
+
+test "push_used publishes used elements and advances idx" {
+    const alloc = std.testing.allocator;
+    var ram: [4096]u8 align(16) = @splat(0);
+    const mem = try GuestMemory.new(alloc);
+
+    defer mem.deinit(alloc);
+    try mem.add(0, &ram, alloc);
+
+    var queue = VirtQueue{
+        .elements = 8,
+        .desc_ring = 0x100,
+        .available_ring = 0x200,
+        .used_ring = 0x300,
+    };
+
+    const used = queue.get_used_ring(mem).?;
+    used.* = .{ .flags = 0, .idx = Value(u16).init(0) };
+
+    try std.testing.expect(queue.push_used(mem, 7, 513));
+    try std.testing.expectEqual(@as(u16, 1), used.idx.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 7), used.slots(queue.elements)[0].id);
+    try std.testing.expectEqual(@as(u32, 513), used.slots(queue.elements)[0].len);
+
+    try std.testing.expect(queue.push_used(mem, 3, 1));
+    try std.testing.expectEqual(@as(u16, 2), used.idx.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 3), used.slots(queue.elements)[1].id);
+    try std.testing.expectEqual(@as(u32, 1), used.slots(queue.elements)[1].len);
+}

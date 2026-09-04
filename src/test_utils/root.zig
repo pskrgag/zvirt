@@ -53,6 +53,16 @@ pub const FdLeakDetector = struct {
         return .{ .count = count - 1 };
     }
 
+    fn check_leak_ex(self: *const Self, print: bool, io: std.Io) !void {
+        const new = try Self.snapshot(io);
+
+        if (new.count != self.count) {
+            if (print)
+                std.debug.print("FDLEAK: old {} new {}\n", .{ self.count, new.count });
+            return error.FdLeaked;
+        }
+    }
+
     pub fn check_leak(self: *const Self, io: std.Io) !void {
         const new = try Self.snapshot(io);
 
@@ -83,7 +93,7 @@ test "leak detector works" {
         );
         defer _ = linux.close(fd);
 
-        try std.testing.expectError(error.FdLeaked, snapshot.check_leak(io));
+        try std.testing.expectError(error.FdLeaked, snapshot.check_leak_ex(false, io));
     }
 }
 
