@@ -107,16 +107,16 @@ fn handle_com(
     try self.com_mutex[idx].lock(io);
     defer self.com_mutex[idx].unlock(io);
 
-    if (self.com[idx]) |*com1| {
+    if (self.com[idx]) |*com| {
         if (io_request.dir == .Out) {
-            try com1.write_reg(
+            try com.write_reg(
                 std.enums.fromInt(device.uart_16550.Register, offset).?,
                 data[0],
                 vm,
                 io,
             );
         } else {
-            const res = try com1.read_reg(
+            const res = try com.read_reg(
                 std.enums.fromInt(device.uart_16550.Register, offset).?,
                 vm,
                 io,

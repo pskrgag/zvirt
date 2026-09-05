@@ -219,7 +219,7 @@ pub const Uart = struct {
     fn clear_irq(self: *Self, vm: *Vm) !void {
         self.iir.irq = .None;
         self.iir.irq_not_pending = 1;
-        try vm.irq_set(4, false);
+        try vm.irq_set(self.irq, false);
     }
 
     fn write_reg_interal(self: *Self, reg: WriteRegister, data: u8, vm: *Vm, io: Io) !void {

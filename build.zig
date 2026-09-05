@@ -9,6 +9,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Run only tests whose names contain any of these strings",
+    ) orelse &.{};
     const cli = b.dependency("cli", .{});
 
     const utils = b.addModule("utils", .{
@@ -125,18 +130,22 @@ pub fn build(b: *std.Build) void {
 
     const mod_tests = b.addTest(.{
         .root_module = mod,
+        .filters = test_filters,
     });
 
     const util_tests = b.addTest(.{
         .root_module = utils,
+        .filters = test_filters,
     });
 
     const test_util_tests = b.addTest(.{
         .root_module = test_utils,
+        .filters = test_filters,
     });
 
     const vmm_tests = b.addTest(.{
         .root_module = vmm,
+        .filters = test_filters,
     });
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
@@ -149,6 +158,7 @@ pub fn build(b: *std.Build) void {
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
+        .filters = test_filters,
     });
 
     // A run step that will run the second test executable.

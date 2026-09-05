@@ -25,7 +25,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
 
             for (self.virtio_devs.items) |*dev| {
                 if (dev.base() == base) {
-                    std.debug.print("offset {x}\n", .{offset});
+                    // std.debug.print("offset {x}\n", .{offset});
 
                     if (!mmio_request.write) {
                         const res = dev.handle_read(@truncate(offset));

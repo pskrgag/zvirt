@@ -6,6 +6,7 @@ const linux = std.os.linux;
 const Dir = std.Io.Dir;
 
 pub const mmap = @import("mmap.zig");
+pub const DiskImage = @import("disk.zig").DiskImage;
 
 pub const TmpUartOutput = struct {
     tmp: std.testing.TmpDir,
@@ -99,4 +100,5 @@ test "leak detector works" {
 
 test {
     _ = @import("mmap.zig");
+    _ = @import("disk.zig");
 }

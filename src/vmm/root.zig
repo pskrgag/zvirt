@@ -534,6 +534,61 @@ test "linux reaches shutdown" {
     try vm.run(allocator, io);
 }
 
+fn dump_whole_file(output: *const test_utils.TmpUartOutput) !void {
+    var buffer: [128 * 1024]u8 = undefined;
+    var reader = output.file.reader(std.testing.io, &buffer);
+
+    while (true) {
+        const contents = reader.interface.peekGreedy(1) catch |err| switch (err) {
+            error.EndOfStream => return,
+            else => return err,
+        };
+
+        std.debug.print("{s}", .{contents});
+        reader.interface.toss(contents.len);
+    }
+}
+
+const Sha256 = std.crypto.hash.sha2.Sha256;
+const disk_sha256_prefix = "DISK-SHA256 ";
+
+fn hash_file(file: std.Io.File) ![Sha256.digest_length]u8 {
+    var hasher = Sha256.init(.{});
+    var buffer: [128 * 1024]u8 = undefined;
+    var offset: u64 = 0;
+
+    while (true) {
+        const bytes_read = try file.readPositionalAll(
+            std.testing.io,
+            &buffer,
+            offset,
+        );
+        hasher.update(buffer[0..bytes_read]);
+        offset += bytes_read;
+
+        if (bytes_read < buffer.len)
+            break;
+    }
+
+    var digest: [Sha256.digest_length]u8 = undefined;
+    hasher.final(&digest);
+    return digest;
+}
+
+fn expect_file_hash(output: *const test_utils.TmpUartOutput, file: std.Io.File) !void {
+    const digest = try hash_file(file);
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    var expected: [disk_sha256_prefix.len + hex.len + 1]u8 = undefined;
+
+    @memcpy(expected[0..disk_sha256_prefix.len], disk_sha256_prefix);
+    @memcpy(expected[disk_sha256_prefix.len..][0..hex.len], &hex);
+    expected[expected.len - 1] = '\n';
+
+    var buffer: [128 * 1024]u8 = undefined;
+    const contents = try output.read(&buffer);
+    try std.testing.expect(std.mem.indexOf(u8, contents, &expected) != null);
+}
+
 fn wait_for_output(
     output: *const test_utils.TmpUartOutput,
     needle: []const u8,
@@ -686,6 +741,77 @@ test "linux reaches console" {
     // Stop the vm
     try vm.stop();
     thread.join();
+}
+
+test "Virtio IO" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/bzImage",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    const initrd_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "zig-out/initrds/test_block.img",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(initrd_bytes);
+
+    var disk = try test_utils.DiskImage.create(256 << 10);
+    defer disk.deinit();
+
+    const disk_path = try disk.path(allocator);
+    defer allocator.free(disk_path);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+        .block_device = disk_path,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
+
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+
+    errdefer {
+        dump_whole_file(&uart_output) catch {};
+    }
+
+    var initrd_stdout = try test_utils.TmpUartOutput.create();
+    defer initrd_stdout.deinit();
+
+    try vm.attach_console(.{
+        .index = 0,
+        .output = uart_output.file,
+    });
+    try vm.attach_console(.{
+        .index = 1,
+        .output = initrd_stdout.file,
+    });
+
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
+
+    try wait_for_output(&uart_output, "END");
+
+    // Stop the vm
+    try vm.stop();
+    thread.join();
+
+    try expect_file_hash(&initrd_stdout, disk.file);
 }
 
 test {
