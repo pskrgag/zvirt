@@ -4,7 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const bzimage = @import("bzimage.zig");
 const arch = switch (builtin.cpu.arch) {
-    .x86, .x86_64 => @import("../arch/x86/root.zig"),
+    .x86, .x86_64 => @import("../arch/x86/vm.zig"),
     else => @compileError("unsupported architecture"),
 };
 const GuestMemory = @import("../memory.zig").GuestMemory;

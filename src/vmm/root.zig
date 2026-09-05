@@ -18,7 +18,7 @@ pub const IoResult = kvm.IoResult;
 const memory = @import("memory.zig");
 
 pub const arch = switch (builtin.cpu.arch) {
-    .x86, .x86_64 => @import("arch/x86/root.zig"),
+    .x86, .x86_64 => @import("arch/x86/vm.zig"),
     else => @compileError("unsupported architecture"),
 };
 
@@ -75,13 +75,13 @@ const VmState = struct {
 pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
-    device_bus: arch.DeviceBus,
     io: std.Io,
     config: VmConfig,
     memory: *memory.GuestMemory,
     epoll: Epoll,
     state: VmState = .{},
     old_sigaction: posix.Sigaction,
+    archvm: arch.ArchVm,
 
     const Self = @This();
 
@@ -98,10 +98,10 @@ pub const Vm = struct {
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
 
-        var device_bus = try arch.DeviceBus.new(allocator);
-        errdefer device_bus.deinit(allocator, io);
+        var archvm = try arch.ArchVm.new(allocator);
+        errdefer archvm.deinit(allocator, io);
 
-        try arch.setup_vm(&vm, mem, &config, allocator);
+        try archvm.setup_vm(&vm, mem, &config, allocator);
         const img = try image.parse(config.binary, mem, &config);
 
         for (mem.regions.items) |reg| {
@@ -118,11 +118,11 @@ pub const Vm = struct {
             .config = config,
             .epoll = try Epoll.new(),
             .old_sigaction = old,
-            .device_bus = device_bus,
+            .archvm = archvm,
         };
         errdefer self.epoll.deinit();
 
-        try self.device_bus.init(&config, self, allocator, io);
+        try self.archvm.setup_devices(&config, self, allocator, io);
         _ = try self.create_vcpu(img.ep, 0, io, allocator);
 
         return self;
@@ -136,7 +136,7 @@ pub const Vm = struct {
         if (self.state.state.load(.monotonic) != .Initialized)
             return error.InvalidState;
 
-        try self.device_bus.attach_console(&console, self);
+        try self.archvm.attach_console(&console, self);
         self.state.console_attached = true;
     }
 
@@ -150,9 +150,8 @@ pub const Vm = struct {
                 cpu.deinit(alloc, io);
         }
 
-        try arch.deinit_vm(self.memory, &self.config);
         self.epoll.deinit();
-        self.device_bus.deinit(alloc, io);
+        self.archvm.deinit(alloc, io);
         self.vm.deinit();
         self.memory.deinit(alloc);
         Self.restore_sighandler(self.old_sigaction);
@@ -230,7 +229,7 @@ pub const Vm = struct {
             return error.AlreadyStarted;
         }
 
-        try arch.vm_prerun(self.memory, &self.device_bus, self.config.cmdline,  alloc);
+        try self.archvm.vm_prerun(self.memory, self.config.cmdline, alloc);
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {
@@ -262,7 +261,7 @@ pub const Vm = struct {
                         }
                     },
                     .io_bus => {
-                        try self.device_bus.handle_event(token.id, self, io);
+                        try self.archvm.device_bus.handle_event(token.id, self, io);
                     },
                 }
             }

@@ -166,13 +166,13 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        pub fn new(base: u64, device: Device, vm: *Vm, alloc: std.mem.Allocator) Self {
+        pub fn new(base: u64, device: Device, vm: *Vm, irq: u32, alloc: std.mem.Allocator) Self {
             // TODO: replace all 4096 with arch page size
             std.debug.assert(std.mem.isAligned(base, 4096));
 
             return .{
                 .base = base,
-                .irq = 5,
+                .irq = irq,
                 .device = device,
                 .vm = vm,
                 .alloc = std.heap.ArenaAllocator.init(alloc),
@@ -300,6 +300,7 @@ pub const VirtioDevice = union(enum) {
         base_address: u64,
         kind: VirtioDeviceInit,
         vm: *Vm,
+        irq_num: u32,
         alloc: std.mem.Allocator,
         io: std.Io,
     ) !Self {
@@ -309,6 +310,7 @@ pub const VirtioDevice = union(enum) {
                     base_address,
                     try Block.new(path, io),
                     vm,
+                    irq_num,
                     alloc,
                 ),
             },
@@ -321,7 +323,7 @@ pub const VirtioDevice = union(enum) {
         };
     }
 
-    pub fn irq(self: *const Self) u64 {
+    pub fn irq(self: *const Self) u32 {
         return switch (self.*) {
             inline else => |*device| device.irq,
         };

@@ -89,7 +89,7 @@ pub const Block = struct {
 
                 const len = self.file.readPositionalAll(io, to_write, blkreq.sector * 512) catch {
                     status[0] = VIRTIO_BLK_S_IOERR;
-                    return 0;
+                    return 1;
                 };
 
                 status[0] = VIRTIO_BLK_S_OK;
@@ -102,13 +102,12 @@ pub const Block = struct {
 
                 _ = self.file.writePositionalAll(io, to_read, blkreq.sector * 512) catch {
                     status[0] = VIRTIO_BLK_S_IOERR;
-                    return 0;
+                    return 1;
                 };
 
                 status[0] = VIRTIO_BLK_S_OK;
 
-                // Account for status write
-                return @truncate(to_read.len + 1);
+                return @truncate(1);
             },
             .Flush => {
                 self.file.sync(io) catch {

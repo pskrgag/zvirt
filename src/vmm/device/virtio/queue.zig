@@ -223,7 +223,7 @@ test "kick returns a descriptor chain in descriptor order" {
     var ram: [4096]u8 align(16) = @splat(0);
     const mem = try GuestMemory.new(alloc);
     defer mem.deinit(alloc);
-    try mem.add(0, &ram, alloc);
+    try mem.add(0, &ram, false, alloc);
 
     var queue = VirtQueue{
         .elements = 8,
@@ -279,7 +279,7 @@ test "kick consumes each available entry once" {
     var ram: [4096]u8 align(16) = @splat(0);
     const mem = try GuestMemory.new(alloc);
     defer mem.deinit(alloc);
-    try mem.add(0, &ram, alloc);
+    try mem.add(0, &ram, false, alloc);
 
     var queue = VirtQueue{
         .elements = 8,
@@ -316,7 +316,7 @@ test "push_used publishes used elements and advances idx" {
     const mem = try GuestMemory.new(alloc);
 
     defer mem.deinit(alloc);
-    try mem.add(0, &ram, alloc);
+    try mem.add(0, &ram, false, alloc);
 
     var queue = VirtQueue{
         .elements = 8,

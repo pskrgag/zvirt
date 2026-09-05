@@ -7,7 +7,7 @@ pub const c = @cImport({
 const VmConfig = @import("../root.zig").VmConfig;
 const builtin = @import("builtin");
 const arch = switch (builtin.cpu.arch) {
-    .x86, .x86_64 => @import("../arch/x86/root.zig"),
+    .x86, .x86_64 => @import("../arch/x86/vm.zig"),
     else => @compileError("unsupported architecture"),
 };
 const std = @import("std");
@@ -167,8 +167,8 @@ test "test Linux kernel" {
         -1,
         0,
     );
-    defer mmap.munmap(ram);
+    errdefer mmap.munmap(ram);
 
-    try mem.add(0x0, ram[0 .. 1 << 30], allocator);
+    try mem.add(0x0, ram[0 .. 1 << 30], true, allocator);
     _ = try parse(binary_bytes, mem, &VmConfig{ .ram_size = 2 << 30, .binary = "" });
 }

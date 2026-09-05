@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const mmap = @import("test_utils").mmap;
 
 pub const GuestPhysicalAddress = u64;
 
@@ -9,6 +10,7 @@ pub const MemoryRegion = struct {
     raw: []u8,
     gpa: GuestPhysicalAddress,
     slot: u8,
+    mmaped: bool,
 
     fn contains(self: *MemoryRegion, addr: GuestPhysicalAddress) bool {
         return addr >= self.gpa and addr < self.gpa + self.raw.len;
@@ -50,14 +52,25 @@ pub const GuestMemory = struct {
         return self;
     }
 
-    pub fn add(self: *Self, gpa: GuestPhysicalAddress, mem: []u8, alloc: Allocator) !void {
+    pub fn add(self: *Self, gpa: GuestPhysicalAddress, mem: []u8, mmaped: bool, alloc: Allocator) !void {
         const new_slot = self.slot;
 
-        try self.regions.append(alloc, .{ .gpa = gpa, .slot = new_slot, .raw = mem });
+        try self.regions.append(alloc, .{
+            .gpa = gpa,
+            .slot = new_slot,
+            .raw = mem,
+            .mmaped = mmaped,
+        });
         self.slot += 1;
     }
 
     pub fn deinit(self: *Self, alloc: Allocator) void {
+        for (self.regions.items) |reg| {
+            if (reg.mmaped) {
+                mmap.munmap(@alignCast(reg.raw));
+            }
+        }
+
         self.regions.deinit(alloc);
         alloc.destroy(self);
     }

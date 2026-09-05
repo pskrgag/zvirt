@@ -7,6 +7,7 @@ const IoResult = @import("kvm").IoResult;
 const Vm = @import("../../root.zig").Vm;
 const VirtioDevice = @import("../../device/root.zig").VirtioDevice;
 const layout = @import("layout.zig");
+const IrqAllocator = @import("vm.zig").IrqAllocator;
 
 const io_bus_struct = @import("io_bus.zig");
 const mmio_bus_struct = @import("mmio_bus.zig");
@@ -41,12 +42,29 @@ pub fn new(alloc: std.mem.Allocator) !Self {
     return .{ .mmio_bus = try mmio_bus_struct.new(alloc) };
 }
 
-pub fn init(self: *Self, config: *const VmConfig, vm: *Vm, alloc: std.mem.Allocator, io: std.Io) !void {
+pub fn setup_devices(
+    self: *Self,
+    config: *const VmConfig,
+    vm: *Vm,
+    irq_alloc: *IrqAllocator,
+    alloc: std.mem.Allocator,
+    io: std.Io,
+) !void {
     if (config.block_device.len != 0) {
         const base = layout.virtio_device(config, 0);
+        const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
+
+        errdefer irq_alloc.free(irq);
 
         self.mmio_bus.register_device(
-            try VirtioDevice.new(base, .{ .BlockDevice = config.block_device }, vm, alloc, io),
+            try VirtioDevice.new(
+                base,
+                .{ .BlockDevice = config.block_device },
+                vm,
+                @truncate(irq),
+                alloc,
+                io,
+            ),
         );
     }
 }
