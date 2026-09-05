@@ -58,6 +58,7 @@ pub const VmConfig = struct {
 pub const VmConsoleConfig = struct {
     input: ?std.Io.File = null,
     output: std.Io.File,
+    index: u8,
     configure_terminal: bool = false,
 };
 
@@ -69,7 +70,6 @@ const VmStateKind = enum(u8) {
 
 const VmState = struct {
     state: std.atomic.Value(VmStateKind) = std.atomic.Value(VmStateKind).init(.Initialized),
-    console_attached: bool = false,
 };
 
 pub const Vm = struct {
@@ -130,14 +130,10 @@ pub const Vm = struct {
 
     // thread-unsafe
     pub fn attach_console(self: *Self, console: VmConsoleConfig) !void {
-        if (self.state.console_attached)
-            return error.ConsoleAlreadyAttached;
-
         if (self.state.state.load(.monotonic) != .Initialized)
             return error.InvalidState;
 
         try self.archvm.attach_console(&console, self);
-        self.state.console_attached = true;
     }
 
     pub fn irq_set(self: *Self, num: u32, set: bool) !void {
@@ -346,12 +342,16 @@ test "Console attach" {
         defer vm.deinit(allocator, io);
 
         try vm.attach_console(.{
+            .index = 0,
             .output = std.Io.File.stdout(),
         });
 
-        try std.testing.expectError(error.ConsoleAlreadyAttached, vm.attach_console(.{
+        if (vm.attach_console(.{
+            .index = 0,
             .output = std.Io.File.stdout(),
-        }));
+        })) |_| {
+            return error.TestExpectedError;
+        } else |_| {}
     }
 
     {
@@ -375,6 +375,7 @@ test "Console attach" {
         while (vm.state.state.load(.monotonic) != .Running) {}
 
         try std.testing.expectError(error.InvalidState, vm.attach_console(.{
+            .index = 0,
             .output = std.Io.File.stdout(),
         }));
 
@@ -487,6 +488,7 @@ test "guest port write reaches COM1 UART" {
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
     try vm.attach_console(.{
+        .index = 0,
         .output = uart_output.file,
     });
 
@@ -525,6 +527,7 @@ test "linux reaches shutdown" {
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
     try vm.attach_console(.{
+        .index = 0,
         .output = uart_output.file,
     });
 
@@ -616,6 +619,7 @@ test "linux login and reboot" {
     defer input_writer.close(io);
 
     try vm.attach_console(.{
+        .index = 0,
         .input = uart_input,
         .output = uart_output.file,
     });
@@ -672,6 +676,7 @@ test "linux reaches console" {
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
     try vm.attach_console(.{
+        .index = 0,
         .output = uart_output.file,
     });
 

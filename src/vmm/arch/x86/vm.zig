@@ -88,6 +88,9 @@ pub const ArchVm = struct {
         // Reserve IRQ for com1
         _ = idalloc.allocate_specific(4).?;
 
+        // Reserve IRQ for com2
+        _ = idalloc.allocate_specific(3).?;
+
         // Reserve IRQ for PIT
         _ = idalloc.allocate_specific(0).?;
 

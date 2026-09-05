@@ -284,6 +284,7 @@ pub fn VirtioMmio(comptime Device: type) type {
 
         pub fn deinit(self: *Self, io: std.Io) void {
             self.device.deinit(io);
+            self.alloc.deinit();
         }
     };
 }

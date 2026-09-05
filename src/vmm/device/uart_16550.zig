@@ -107,6 +107,7 @@ pub const Uart = struct {
     thre_pending: bool = false,
     storage: [128]u8 = undefined,
     rx_queue: std.Deque(u8) = undefined,
+    irq: u32,
 
     const Self = @This();
 
@@ -211,7 +212,7 @@ pub const Uart = struct {
         if (self.irq_enabled()) {
             self.iir.irq_not_pending = 0;
             self.iir.irq = irq;
-            try vm.irq_set(4, true);
+            try vm.irq_set(self.irq, true);
         }
     }
 

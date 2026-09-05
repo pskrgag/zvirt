@@ -110,6 +110,13 @@ fn run() !void {
         .input = std.Io.File.stdin(),
         .output = std.Io.File.stdout(),
         .configure_terminal = true,
+        .index = 0,
+    });
+
+    try vm.attach_console(.{
+        .output = std.Io.File.stderr(),
+        .configure_terminal = false,
+        .index = 1,
     });
     try vm.run(allocator, io);
 }
