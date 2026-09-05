@@ -551,6 +551,8 @@ fn dump_whole_file(output: *const test_utils.TmpUartOutput) !void {
 
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const disk_sha256_prefix = "DISK-SHA256 ";
+const write_test_seed = 0x5a17_c3e2_91bd_704f;
+const write_test_size = 256 << 10;
 
 fn hash_file(file: std.Io.File) ![Sha256.digest_length]u8 {
     var hasher = Sha256.init(.{});
@@ -587,6 +589,27 @@ fn expect_file_hash(output: *const test_utils.TmpUartOutput, file: std.Io.File) 
     var buffer: [128 * 1024]u8 = undefined;
     const contents = try output.read(&buffer);
     try std.testing.expect(std.mem.indexOf(u8, contents, &expected) != null);
+}
+
+fn hash_write_pattern(seed: u64, size: u64) [Sha256.digest_length]u8 {
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
+    var hasher = Sha256.init(.{});
+    var buffer: [128 * 1024]u8 = undefined;
+    var remaining = size;
+
+    while (remaining > 0) {
+        const length: usize = @intCast(@min(remaining, buffer.len));
+        const bytes = buffer[0..length];
+
+        random.bytes(bytes);
+        hasher.update(bytes);
+        remaining -= bytes.len;
+    }
+
+    var digest: [Sha256.digest_length]u8 = undefined;
+    hasher.final(&digest);
+    return digest;
 }
 
 fn wait_for_output(
@@ -743,7 +766,7 @@ test "linux reaches console" {
     thread.join();
 }
 
-test "Virtio IO" {
+test "Virtio IO read" {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
@@ -812,6 +835,68 @@ test "Virtio IO" {
     thread.join();
 
     try expect_file_hash(&initrd_stdout, disk.file);
+}
+
+test "Virtio IO write" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/bzImage",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    const initrd_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "zig-out/initrds/test_block_write.img",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(initrd_bytes);
+
+    var disk = try test_utils.DiskImage.create(write_test_size);
+    defer disk.deinit();
+
+    const disk_path = try disk.path(allocator);
+    defer allocator.free(disk_path);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+        .block_device = disk_path,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
+
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+    errdefer dump_whole_file(&uart_output) catch {};
+
+    try vm.attach_console(.{
+        .index = 0,
+        .output = uart_output.file,
+    });
+
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
+
+    try wait_for_output(&uart_output, "END");
+
+    try vm.stop();
+    thread.join();
+
+    const expected = hash_write_pattern(write_test_seed, write_test_size);
+    const actual = try hash_file(disk.file);
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
 }
 
 test {

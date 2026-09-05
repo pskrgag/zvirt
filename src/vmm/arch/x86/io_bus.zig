@@ -44,24 +44,29 @@ fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
 }
 
 pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
-    if (self.com[console.index] != null)
+    if (console.index >= MAX_COMS)
+        return error.InvalidComIndex;
+
+    const index: usize = console.index;
+
+    if (self.com[index] != null)
         return error.ComAlreadyExists;
 
-    self.com[console.index] = device.uart_16550.Uart{
+    self.com[index] = device.uart_16550.Uart{
         .in = console.input,
         .out = console.output,
-        .irq = if (console.index == 0 or console.index == 2)
+        .irq = if (index == 0 or index == 2)
             4
         else
             3,
     };
-    self.com[console.index].?.init();
+    self.com[index].?.init();
 
     if (console.input) |in|
-        try vm.register_fd(in.handle, 0, .io_bus);
+        try vm.register_fd(in.handle, @intCast(index), .io_bus);
 
     if (console.configure_terminal) {
-        try self.setup_terminal(console.output.handle, console.index);
+        try self.setup_terminal(console.output.handle, index);
     }
 }
 
@@ -74,13 +79,15 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
-    if (id == 0) {
-        try self.com_mutex[0].lock(io);
-        defer self.com_mutex[0].unlock(io);
+    if (id >= MAX_COMS)
+        return error.InvalidComIndex;
 
-        if (self.com[0]) |*com1|
-            try com1.handle_event(vm, io);
-    }
+    const index: usize = @intCast(id);
+    try self.com_mutex[index].lock(io);
+    defer self.com_mutex[index].unlock(io);
+
+    if (self.com[index]) |*com|
+        try com.handle_event(vm, io);
 }
 
 fn handle_com(
