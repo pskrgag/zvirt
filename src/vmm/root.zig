@@ -991,6 +991,87 @@ test "Virtio IO write" {
     try std.testing.expectEqualSlices(u8, &expected, &actual);
 }
 
+test "SMP works" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/bzImage",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    const initrd_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/initrd.img",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(initrd_bytes);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+        .cmdline = "panic=default pci=off",
+        .smp = 16,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
+
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+
+    var pipe_fds: [2]posix.fd_t = undefined;
+    const pipe_rc = linux.pipe2(&pipe_fds, .{ .CLOEXEC = true });
+    switch (posix.errno(pipe_rc)) {
+        .SUCCESS => {},
+        else => |err| return posix.unexpectedErrno(err),
+    }
+
+    const uart_input: std.Io.File = .{
+        .handle = pipe_fds[0],
+        .flags = .{ .nonblocking = false },
+    };
+    defer uart_input.close(io);
+
+    const input_writer: std.Io.File = .{
+        .handle = pipe_fds[1],
+        .flags = .{ .nonblocking = false },
+    };
+    defer input_writer.close(io);
+
+    try vm.attach_console(.{
+        .index = 0,
+        .input = uart_input,
+        .output = uart_output.file,
+    });
+
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
+
+    // Login discards all input data after <enter>. So we need to push data lock-step.
+    try wait_for_output(&uart_output, "login");
+    try input_writer.writeStreamingAll(io, "root\n");
+
+    try wait_for_output(&uart_output, "Password:");
+    try input_writer.writeStreamingAll(io, "root\n");
+
+    try wait_for_output(&uart_output, "# ");
+    try input_writer.writeStreamingAll(io, "cat /proc/cpuinfo | grep processor | wc -l\n");
+    try wait_for_output(&uart_output, "16");
+
+    try vm.stop();
+    thread.join();
+}
+
 test {
     _ = @import("image/root.zig");
 }
