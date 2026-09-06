@@ -16,11 +16,12 @@ const VIRTIO_BLK_S_UNSUPP: u8 = 2;
 const BlockRequestKind = enum(u32) {
     Read = 0,
     Write = 1,
-    Flush = 5,
+    Flush = 4,
+    GetId = 8,
 };
 
 const BlockRequest = extern struct {
-    kind: BlockRequestKind,
+    kind: u32,
     reserved: u32,
     sector: u64,
 };
@@ -79,7 +80,14 @@ pub const Block = struct {
             return error.InvalidFormat;
         };
 
-        switch (blkreq.kind) {
+        const kind = std.enums.fromInt(BlockRequestKind, blkreq.kind) orelse {
+            std.debug.print("not supported request {}\n", .{blkreq.kind});
+
+            status[0] = VIRTIO_BLK_S_UNSUPP;
+            return @truncate(1);
+        };
+
+        switch (kind) {
             .Read => {
                 const to_write = requests[1].as_rw() orelse {
                     std.debug.print("not writable second descr\n", .{});
@@ -117,6 +125,19 @@ pub const Block = struct {
 
                 status[0] = VIRTIO_BLK_S_OK;
                 return 1;
+            },
+            .GetId => {
+                const diskid: [:0]const u8 = "zvirt-disk0";
+                const to_write = requests[1].as_rw() orelse {
+                    std.debug.print("not writable second descr\n", .{});
+                    status[0] = VIRTIO_BLK_S_IOERR;
+                    return error.InvalidFormat;
+                };
+
+                @memcpy(to_write[0..diskid.len], diskid);
+
+                status[0] = VIRTIO_BLK_S_OK;
+                return 1 + diskid.len;
             },
         }
     }

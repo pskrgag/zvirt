@@ -154,11 +154,12 @@ pub fn VirtioMmio(comptime Device: type) type {
                 };
 
                 for (reqs.items) |req| {
-                    _ = self.virt_queues[self.queue_sel].push_used(
+                    const res = self.virt_queues[self.queue_sel].push_used(
                         self.vm.memory,
                         req.head,
                         req.len,
                     );
+                    std.debug.assert(res);
                 }
 
                 self.irq_state |= VIRTIO_IRQ_USED_RING;

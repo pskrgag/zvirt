@@ -100,7 +100,7 @@ pub const VirtQueue = struct {
     ready: u32 = 0,
     elements: u32 = MAX_QUEUE_ELEMENTS,
 
-    last_avail_idx: usize = 0,
+    last_avail_idx: u16 = 0,
     next_used_idx: u16 = 0,
 
     // Invalid PA
