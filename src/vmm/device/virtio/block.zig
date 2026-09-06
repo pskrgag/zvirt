@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const queue = @import("queue.zig");
+const log = std.log.scoped(.virtio_blk);
 
 pub const c = @cImport({
     @cInclude("linux/virtio_blk.h");
@@ -65,23 +66,26 @@ pub const Block = struct {
         const requests = req.get_requests();
 
         if (requests.len != 3) {
-            std.debug.print("Unusual layout for blk request\n", .{});
+            log.err("unsupported descriptor layout: {} descriptors", .{requests.len});
             @panic("todo");
         }
 
         if (requests[0].len() != @sizeOf(BlockRequest)) {
-            std.debug.print("\n", .{});
+            log.err("invalid request header length: expected {}, got {}", .{
+                @sizeOf(BlockRequest),
+                requests[0].len(),
+            });
             @panic("todo");
         }
 
         const blkreq: *align(1) const BlockRequest = @ptrCast(requests[0].as_ro().ptr);
         const status: []u8 = requests[2].as_rw() orelse {
-            std.debug.print("not writable third descr\n", .{});
+            log.err("status descriptor is not writable", .{});
             return error.InvalidFormat;
         };
 
         const kind = std.enums.fromInt(BlockRequestKind, blkreq.kind) orelse {
-            std.debug.print("not supported request {}\n", .{blkreq.kind});
+            log.warn("unsupported request kind {}", .{blkreq.kind});
 
             status[0] = VIRTIO_BLK_S_UNSUPP;
             return @truncate(1);
@@ -90,7 +94,7 @@ pub const Block = struct {
         switch (kind) {
             .Read => {
                 const to_write = requests[1].as_rw() orelse {
-                    std.debug.print("not writable second descr\n", .{});
+                    log.err("read data descriptor is not writable", .{});
                     status[0] = VIRTIO_BLK_S_IOERR;
                     return error.InvalidFormat;
                 };
@@ -129,7 +133,7 @@ pub const Block = struct {
             .GetId => {
                 const diskid: [:0]const u8 = "zvirt-disk0";
                 const to_write = requests[1].as_rw() orelse {
-                    std.debug.print("not writable second descr\n", .{});
+                    log.err("device ID descriptor is not writable", .{});
                     status[0] = VIRTIO_BLK_S_IOERR;
                     return error.InvalidFormat;
                 };

@@ -8,6 +8,7 @@ const Vm = @import("../../root.zig").Vm;
 const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const Mutex = std.Io.Mutex;
 const posix = std.posix;
+const log = std.log.scoped(.io_bus);
 
 const Self = @This();
 
@@ -222,7 +223,7 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
             return false;
         },
         else => {
-            std.debug.print("Unknown port {any}\n", .{io_request});
+            log.err("unknown port access: {any}", .{io_request});
             return error.UnknowPort;
         },
     };

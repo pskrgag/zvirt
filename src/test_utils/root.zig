@@ -4,6 +4,7 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const Dir = std.Io.Dir;
+const log = std.log.scoped(.fd_leak_detector);
 
 pub const mmap = @import("mmap.zig");
 pub const DiskImage = @import("disk.zig").DiskImage;
@@ -59,7 +60,7 @@ pub const FdLeakDetector = struct {
 
         if (new.count != self.count) {
             if (print)
-                std.debug.print("FDLEAK: old {} new {}\n", .{ self.count, new.count });
+                log.err("FDLEAK: old {} new {}", .{ self.count, new.count });
             return error.FdLeaked;
         }
     }
@@ -68,7 +69,7 @@ pub const FdLeakDetector = struct {
         const new = try Self.snapshot(io);
 
         if (new.count != self.count) {
-            std.debug.print("FDLEAK: old {} new {}\n", .{ self.count, new.count });
+            log.err("FDLEAK: old {} new {}", .{ self.count, new.count });
             return error.FdLeaked;
         }
     }

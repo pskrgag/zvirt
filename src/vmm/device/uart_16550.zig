@@ -3,6 +3,7 @@
 const std = @import("std");
 const File = std.Io.File;
 const Io = std.Io;
+const log = std.log.scoped(.uart_16550);
 const Vm = @import("../root.zig").Vm;
 
 pub const Register = enum(u16) {
@@ -224,7 +225,7 @@ pub const Uart = struct {
 
     fn write_reg_interal(self: *Self, reg: WriteRegister, data: u8, vm: *Vm, io: Io) !void {
         // if (reg != .Thr)
-        //     std.debug.print("write {} {}\n", .{ reg, data });
+        //     log.debug("register write: reg={} value={}", .{ reg, data });
 
         switch (reg) {
             .Thr => {

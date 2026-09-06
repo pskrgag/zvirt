@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const rtc = @import("mc146818rtc.zig");
+const log = std.log.scoped(.cmos);
 
 pub const Register = enum(u16) {
     In = 0,
@@ -40,7 +41,7 @@ pub const Cmos = struct {
                 if (std.enums.fromInt(rtc.Register, self.reg_select)) |rtc_reg| {
                     break :blk self.rtc.read_reg(rtc_reg);
                 } else {
-                    std.debug.print("reg {}\n", .{self.reg_select});
+                    log.err("unsupported register {}", .{self.reg_select});
                     @panic("todo");
                 }
             },

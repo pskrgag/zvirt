@@ -6,6 +6,7 @@ const posix = std.posix;
 const page_size_min = std.heap.page_size_min;
 const AutoHashMap = std.AutoHashMap;
 const Mutex = std.Io.Mutex;
+const log = std.log.scoped(.mmap_tracker);
 
 // NOTE: It would be nice to check vmsize, but it's unreliable, since allocator may allocate arenas.
 // This detector only tracks mmap calls from the VMM
@@ -79,7 +80,7 @@ pub fn deinit() !void {
 
         if (len != 0) {
             if (print)
-                std.debug.print("Mmap allocations leaked {}\n", .{len});
+                log.err("mmap allocations leaked {}", .{len});
 
             return error.MmapLeaked;
         }

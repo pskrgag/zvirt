@@ -9,6 +9,7 @@ const Event = std.Io.Event;
 const StopFlag = std.atomic.Value(bool);
 const IoResult = kvm.IoResult;
 const EventFd = utils.EventFd.EventFd;
+const log = std.log.scoped(.vcpu);
 
 pub const VCpuExitReason = enum(u8) {
     Shutdown,
@@ -106,10 +107,11 @@ pub const VCpu = struct {
             };
 
             const reason = self.cpu.exit_reason() catch {
-                std.debug.print("Unknown exit reason!\n", .{});
+                log.warn("unknown exit reason", .{});
                 self.exit_reason.store(.InternalError, .monotonic);
                 break;
             };
+
             switch (reason) {
                 .Io => |io_req| {
                     // Detecting write to fake port, which indicates test exit

@@ -5,6 +5,7 @@ const device = @import("../../device/root.zig");
 const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
 const VirtioDevice = @import("../../device/root.zig").VirtioDevice;
+const log = std.log.scoped(.mmio_bus);
 
 pub const MAX_DEVICES = 10;
 const Self = @This();
@@ -13,7 +14,7 @@ buffer: [MAX_DEVICES]VirtioDevice,
 virtio_devs: std.ArrayList(VirtioDevice),
 
 pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
-    // std.debug.print("trying {any}\n", .{mmio_request});
+    // log.debug("access: {any}", .{mmio_request});
     switch (mmio_request.pa) {
         0xa0000...0xbffff,
         0xc0000...0xfffff,
@@ -25,7 +26,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
 
             for (self.virtio_devs.items) |*dev| {
                 if (dev.base() == base) {
-                    // std.debug.print("offset {x}\n", .{offset});
+                    // log.debug("virtio offset 0x{x}", .{offset});
 
                     if (!mmio_request.write) {
                         const res = dev.handle_read(@truncate(offset));
@@ -38,7 +39,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
                 }
             }
 
-            std.debug.print("0x{x}\n", .{mmio_request.pa});
+            log.err("unhandled MMIO address 0x{x}", .{mmio_request.pa});
             @panic("todo");
         },
     }
