@@ -54,6 +54,9 @@ pub const VmConfig = struct {
 
     // Kernel cmdline
     cmdline: []const u8 = "",
+
+    // Cpu count
+    smp: u8 = 1,
 };
 
 pub const VmConsoleConfig = struct {
@@ -76,6 +79,7 @@ const VmState = struct {
 pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
+    vcpus_count: usize = 0,
     io: std.Io,
     config: VmConfig,
     memory: *memory.GuestMemory,
@@ -124,7 +128,11 @@ pub const Vm = struct {
         errdefer self.epoll.deinit();
 
         try self.archvm.setup_devices(&config, self, allocator, io);
-        _ = try self.create_vcpu(img.ep, 0, io, allocator);
+        try self.create_vcpu(img.ep, 0, io, allocator);
+
+        for (1..config.smp) |i| {
+            try self.create_vcpu(0x0, i, io, allocator);
+        }
 
         return self;
     }
@@ -161,7 +169,7 @@ pub const Vm = struct {
         id: usize,
         io: std.Io,
         alloc: std.mem.Allocator,
-    ) !*VCpu {
+    ) !void {
         if (id >= MAX_VCPUS)
             return error.InvalidVcpuIndex;
 
@@ -169,7 +177,7 @@ pub const Vm = struct {
             return error.VcpuAlreadyExists;
 
         self.vcpus[id] = try VCpu.new(self, id, ep, io, alloc);
-        return self.vcpus[id].?;
+        self.vcpus_count += 1;
     }
 
     fn wake_handler(_: std.posix.SIG) callconv(.c) void {}
@@ -226,7 +234,7 @@ pub const Vm = struct {
             return error.AlreadyStarted;
         }
 
-        try self.archvm.vm_prerun(self.memory, self.config.cmdline, alloc);
+        try self.archvm.vm_prerun(self, self.config.cmdline, alloc);
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {

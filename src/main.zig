@@ -3,6 +3,8 @@ const cli = @import("cli");
 const zvirt = @import("zvirt");
 const Vm = zvirt.vmm.Vm;
 
+const log = std.log.scoped(.cli);
+
 const DEFAULT_MEMORY_SIZE = 1 << 30;
 
 var config = struct {
@@ -11,6 +13,7 @@ var config = struct {
     initramfs: []const u8 = "",
     block_device: []const u8 = "",
     cmdline: []const u8 = "",
+    smp: []const u8 = "",
     io: ?std.Io = null,
     allocator: ?std.mem.Allocator = null,
 }{};
@@ -48,6 +51,10 @@ pub fn main(init: std.process.Init) !void {
                 .long_name = "cmdline",
                 .help = "command line",
                 .value_ref = runner.mkRef(&config.cmdline),
+            }, .{
+                .long_name = "smp",
+                .help = "number of vCPUs",
+                .value_ref = runner.mkRef(&config.smp),
             } }),
             .target = .{ .action = .{ .exec = run } },
         },
@@ -97,12 +104,23 @@ fn run() !void {
             allocator.free(data);
     }
 
+    var smp: u8 = 1;
+
+    if (config.smp.len != 0) {
+        smp = try std.fmt.parseInt(u8, config.smp, 10);
+        if (smp == 0) {
+            log.err("SMP cannot be 0\n", .{});
+            return error.InvalidArgument;
+        }
+    }
+
     var vm = try Vm.new(.{
         .ram_size = memory_size,
         .binary = kernel_bytes,
         .initramfs = initramfs,
         .block_device = config.block_device,
         .cmdline = config.cmdline,
+        .smp = smp,
     }, io, allocator);
     defer vm.deinit(allocator, io);
 

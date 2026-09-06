@@ -9,10 +9,13 @@ pub const PMD_ADDR = 0x3000;
 pub const GDT_ADDR = 0x4000;
 pub const BOOT_PARAM_ADDR = 0x5000;
 pub const BOOT_CMDLINE_ADDR = 0x6000;
+pub const BOOT_ACPI_ADDR = 0x9e000;
+pub const BOOT_ACPI_SIZE = 0x2000;
 pub const DEFAULT_LOAD_ADDRESS = 0x100000;
 
 const E820_RAM = 1;
 const E820_RESERVED = 2;
+const E820_ACPI = 3;
 
 pub const LOW_RAM_BEGIN = 0x0;
 pub const HIGH_RAM_BEGIN = 0x00100000;
@@ -23,6 +26,7 @@ pub const MemorySlot = struct {
     kind: enum(u32) {
         Ram = E820_RAM,
         Reserved = E820_RESERVED,
+        Acpi = E820_ACPI,
     },
 };
 
@@ -32,9 +36,16 @@ pub fn virtio_device(config: *const VmConfig, idx: u64) u64 {
     return ram_end + idx * 4096;
 }
 
-pub fn memory_layout(config: *const VmConfig) [3]MemorySlot {
-    return [3]MemorySlot{
-        MemorySlot{ .start = LOW_RAM_BEGIN, .length = 0x000A0000, .kind = .Ram },
+// NOTE: linux reserves first 64k of RAM for allocations:
+//
+// memblock_reserve(0, SZ_64K);
+//
+// This memory may be used for AP cpu bootstrap, which has a limit of 1MiB
+// TODO: figure out why
+pub fn memory_layout(config: *const VmConfig) [4]MemorySlot {
+    return [4]MemorySlot{
+        MemorySlot{ .start = LOW_RAM_BEGIN, .length = 0x9e000, .kind = .Ram },
+        MemorySlot{ .start = BOOT_ACPI_ADDR, .length = 0x2000, .kind = .Acpi },
         MemorySlot{ .start = 0x000A0000, .length = 0x00060000, .kind = .Reserved },
         MemorySlot{ .start = HIGH_RAM_BEGIN, .length = config.ram_size, .kind = .Ram },
     };

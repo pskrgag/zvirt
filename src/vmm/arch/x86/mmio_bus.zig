@@ -29,7 +29,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
                     // log.debug("virtio offset 0x{x}", .{offset});
 
                     if (!mmio_request.write) {
-                        const res = dev.handle_read(@truncate(offset));
+                        const res = try dev.handle_read(@truncate(offset), io);
 
                         return IoResult{ .Mmio = .{ .data = res } };
                     } else {

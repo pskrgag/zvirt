@@ -130,6 +130,8 @@ pub fn parse(
     // NOTE: linux needs type_of_loader to be set for initramfs. Not sure why...
     boot_params.hdr.type_of_loader = 0xff;
 
+    boot_params.acpi_rsdp_addr = arch.layout.BOOT_ACPI_ADDR;
+
     try memory.write(arch.layout.BOOT_PARAM_ADDR, std.mem.asBytes(&boot_params));
     try memory.write(arch.layout.HIGH_RAM_BEGIN, data[kernel_offset..]);
 

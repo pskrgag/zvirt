@@ -12,6 +12,7 @@ const paging = @import("paging.zig");
 const mmap = @import("test_utils").mmap;
 const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const IdAllocator = @import("utils").IdAlloc.IdAllocator;
+const acpi = @import("acpi.zig");
 
 pub const DeviceBus = @import("device_bus.zig");
 pub const layout = @import("layout.zig");
@@ -129,7 +130,7 @@ pub const ArchVm = struct {
 
     pub fn vm_prerun(
         self: *Self,
-        memory: *GuestMemory,
+        vm: *Vm,
         user_cmdline: []const u8,
         alloc: Allocator,
     ) !void {
@@ -150,12 +151,13 @@ pub const ArchVm = struct {
             cmd_line = new_cmd_line;
         }
 
-        try memory.write(layout.BOOT_CMDLINE_ADDR, cmd_line);
+        try vm.memory.write(layout.BOOT_CMDLINE_ADDR, cmd_line);
+        try acpi.setup_tables(vm);
     }
 
     fn setup_memory(memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
         for (layout.memory_layout(config)) |entry| {
-            if (entry.kind == .Ram) {
+            if (entry.kind == .Ram or entry.kind == .Acpi) {
                 const ram = try mmap.mmap(
                     null,
                     entry.length,

@@ -99,6 +99,9 @@ pub const VCpu = struct {
 
         while (!self.stop_flag.load(.monotonic)) {
             self.cpu.run_once(result) catch |e| {
+                if (e == error.Retry)
+                    continue;
+
                 if (e != error.Interrupted)
                     return e;
 

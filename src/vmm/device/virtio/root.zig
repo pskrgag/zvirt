@@ -5,6 +5,7 @@ const Block = @import("block.zig").Block;
 const VirtQueue = @import("queue.zig").VirtQueue;
 const MAX_QUEUE_ELEMENTS = @import("queue.zig").MAX_QUEUE_ELEMENTS;
 const Vm = @import("../../root.zig").Vm;
+const Mutex = std.Io.Mutex;
 
 pub const MmioRegister = enum(u64) {
     Magic = 0x0,
@@ -84,6 +85,7 @@ pub fn VirtioMmio(comptime Device: type) type {
         vm: *Vm,
         irq_state: u32 = 0,
         alloc: std.heap.ArenaAllocator,
+        mutex: Mutex = Mutex.init,
 
         const Self = @This();
 
@@ -188,7 +190,10 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        pub fn handle_read(self: *Self, reg_raw: u32) u32 {
+        pub fn handle_read(self: *Self, reg_raw: u32, io: std.Io) !u32 {
+            try self.mutex.lock(io);
+            defer self.mutex.unlock(io);
+
             if (std.enums.fromInt(MmioRegister, reg_raw)) |reg| {
                 return switch (reg) {
                     .Magic => 0x74726976,
@@ -231,6 +236,9 @@ pub fn VirtioMmio(comptime Device: type) type {
         }
 
         pub fn handle_write(self: *Self, reg_raw: u32, data: u32, io: std.Io) !void {
+            try self.mutex.lock(io);
+            defer self.mutex.unlock(io);
+
             if (std.enums.fromInt(MmioRegister, reg_raw)) |reg| {
                 switch (reg) {
                     // Read only registers
@@ -331,9 +339,9 @@ pub const VirtioDevice = union(enum) {
         };
     }
 
-    pub fn handle_read(self: *Self, reg_raw: u32) u32 {
+    pub fn handle_read(self: *Self, reg_raw: u32, io: std.Io) !u32 {
         return switch (self.*) {
-            inline else => |*device| device.handle_read(reg_raw),
+            inline else => |*device| device.handle_read(reg_raw, io),
         };
     }
 

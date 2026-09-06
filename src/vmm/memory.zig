@@ -20,7 +20,7 @@ pub const MemoryRegion = struct {
         const start = addr;
         const end = addr + size;
 
-        return start >= self.gpa and end < self.gpa + self.raw.len;
+        return start >= self.gpa and end <= self.gpa + self.raw.len;
     }
 
     fn write(self: *MemoryRegion, addr: GuestPhysicalAddress, data: []const u8) ?usize {
