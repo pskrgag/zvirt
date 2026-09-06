@@ -31,7 +31,7 @@ fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
     raw.lflag.ECHO = false;
 
     // Keep Ctrl-C, Ctrl-Z, etc. working as signals.
-    raw.lflag.ISIG = true;
+    raw.lflag.ISIG = false;
 
     // A read may return as soon as one byte is available.
     raw.cc[@intFromEnum(posix.V.MIN)] = 1;
@@ -170,8 +170,8 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
         0xf4 => {
             return true;
         },
-        // No floppy, no POST diagnostics
-        0x3F0...0x3F7, 0x80 => {
+        // No floppy, no POST diagnostics, no PS2
+        0x3F0...0x3F7, 0x80, 0x64 => {
             if (io_request.size != 1)
                 return error.InvalidWrite;
 

@@ -105,7 +105,11 @@ pub const VCpu = struct {
                 continue;
             };
 
-            const reason = try self.cpu.exit_reason();
+            const reason = self.cpu.exit_reason() catch {
+                std.debug.print("Unknown exit reason!\n", .{});
+                self.exit_reason.store(.InternalError, .monotonic);
+                break;
+            };
             switch (reason) {
                 .Io => |io_req| {
                     // Detecting write to fake port, which indicates test exit

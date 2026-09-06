@@ -23,6 +23,11 @@ pub const Cmos = struct {
                     return;
                 }
 
+                // Shutdown
+                if (self.reg_select == 0xf) {
+                    return;
+                }
+
                 return error.InvalidWrite;
             },
         }
