@@ -13,7 +13,7 @@ const Cpuid = extern struct {
     entries: [MAX_ENTRIES]c.kvm_cpuid_entry2,
 };
 
-pub fn configure(kvm_fd: posix.fd_t, vcpu_fd: posix.fd_t) !void {
+pub fn configure(kvm_fd: posix.fd_t, id: u32, num_cpus: u32, vcpu_fd: posix.fd_t) !void {
     var cpuid: Cpuid = .{
         .nent = MAX_ENTRIES,
         .padding = 0,
@@ -25,6 +25,17 @@ pub fn configure(kvm_fd: posix.fd_t, vcpu_fd: posix.fd_t) !void {
         c.KVM_GET_SUPPORTED_CPUID,
         @intFromPtr(&cpuid),
     );
+
+    for (0..cpuid.nent) |i| {
+        if (cpuid.entries[i].function == 0xB) {
+            cpuid.entries[i].edx = id;
+        } else if (cpuid.entries[i].function == 0x1) {
+            cpuid.entries[i].ebx =
+                (cpuid.entries[i].ebx & 0x0000_ffff) |
+                (@as(u32, num_cpus) << 16) |
+                (@as(u32, id & 0xff) << 24);
+        }
+    }
 
     _ = try ioctl(
         vcpu_fd,

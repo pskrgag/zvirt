@@ -33,7 +33,7 @@ const CR0_PE = 1 << 0;
 // Enable paging
 const CR4_PAE = 1 << 5;
 
-pub fn setup_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
+pub fn setup_bs_vcpu(vcpu: *kvm.Vcpu, ep: u64) !void {
     {
         var sregs = try vcpu.get_sregs();
 

@@ -62,12 +62,12 @@ pub const Vm = struct {
         _ = try ioctl(self.fd, c.KVM_CREATE_IRQCHIP, 0);
     }
 
-    pub fn create_vcpu(self: *const Self, id: usize) !Vcpu {
+    pub fn create_vcpu(self: *const Self, id: u32, num_cpus: u32) !Vcpu {
         const fd = try ioctl(self.fd, c.KVM_CREATE_VCPU, id);
         var vcpu = try Vcpu.init(@intCast(fd), self.vcpu_mmap_size, id);
         errdefer vcpu.deinit();
 
-        try cpuid.configure(self.kvm_fd, vcpu.fd);
+        try cpuid.configure(self.kvm_fd, id, num_cpus, vcpu.fd);
         return vcpu;
     }
 

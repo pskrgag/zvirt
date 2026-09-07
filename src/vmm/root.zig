@@ -57,6 +57,14 @@ pub const VmConfig = struct {
 
     // Cpu count
     smp: u8 = 1,
+
+    const Self = @This();
+
+    fn verify(self: *const Self) !void {
+        if (self.smp == 0 or self.smp > MAX_VCPUS) {
+            return error.InvalidCpuCount;
+        }
+    }
 };
 
 pub const VmConsoleConfig = struct {
@@ -91,6 +99,8 @@ pub const Vm = struct {
     const Self = @This();
 
     pub fn new(config: VmConfig, io: std.Io, allocator: std.mem.Allocator) !*Self {
+        try config.verify();
+
         const system = try kvm_system.get();
         var self = try allocator.create(Self);
         errdefer allocator.destroy(self);
@@ -131,7 +141,7 @@ pub const Vm = struct {
         try self.create_vcpu(img.ep, 0, io, allocator);
 
         for (1..config.smp) |i| {
-            try self.create_vcpu(0x0, i, io, allocator);
+            try self.create_vcpu(0x0, @truncate(i), io, allocator);
         }
 
         return self;
@@ -166,7 +176,7 @@ pub const Vm = struct {
     pub fn create_vcpu(
         self: *Self,
         ep: u64,
-        id: usize,
+        id: u32,
         io: std.Io,
         alloc: std.mem.Allocator,
     ) !void {
@@ -1065,7 +1075,12 @@ test "SMP works" {
     try input_writer.writeStreamingAll(io, "root\n");
 
     try wait_for_output(&uart_output, "# ");
+
     try input_writer.writeStreamingAll(io, "cat /proc/cpuinfo | grep processor | wc -l\n");
+    try wait_for_output(&uart_output, "16");
+
+    // check that apicid is unique (i.e. cpuid fix was applied)
+    try input_writer.writeStreamingAll(io, "cat /proc/cpuinfo | grep 'initial apicid' | uniq | wc -l\n");
     try wait_for_output(&uart_output, "16");
 
     try vm.stop();

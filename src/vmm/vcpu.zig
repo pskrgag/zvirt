@@ -34,8 +34,8 @@ pub const VCpu = struct {
 
     const Self = @This();
 
-    pub fn new(vm: *Vm, num: usize, ep: u64, io: std.Io, alloc: std.mem.Allocator) !*Self {
-        var c = try vm.vm.create_vcpu(num);
+    pub fn new(vm: *Vm, num: u32, ep: u64, io: std.Io, alloc: std.mem.Allocator) !*Self {
+        var c = try vm.vm.create_vcpu(num, 16);
         errdefer c.deinit();
 
         const self = try alloc.create(Self);
@@ -51,7 +51,10 @@ pub const VCpu = struct {
             .eventfd = eventfd,
         };
 
-        try arch.setup_vcpu(&c, ep);
+        // NOTE: it makes sense to only initialize BS cpu, since kernel will anyway set the context
+        // on cpu wakeup
+        if (num == 0)
+            try arch.setup_bs_vcpu(&c, ep);
 
         self.thread = try std.Thread.spawn(.{}, Self.run_loop, .{ self, io });
         return self;
