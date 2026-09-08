@@ -7,6 +7,8 @@ const MAX_QUEUE_ELEMENTS = @import("queue.zig").MAX_QUEUE_ELEMENTS;
 const Vm = @import("../../root.zig").Vm;
 const Mutex = std.Io.Mutex;
 
+const log = std.log.scoped(.virtio);
+
 pub const MmioRegister = enum(u64) {
     Magic = 0x0,
     Version = 0x4,
@@ -56,7 +58,7 @@ const VIRTIO_IRQ_CONFIG_CHANGE: u32 = 1 << 1;
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 const Status = u32;
 
-const MAX_QUEUES_SUPPORTED = 1;
+const MAX_QUEUES_SUPPORTED = 16;
 
 fn set_low(value: *u64, low: u32) void {
     value.* = (value.* & 0xffff_ffff_0000_0000) | @as(u64, low);
@@ -71,8 +73,7 @@ pub fn VirtioMmio(comptime Device: type) type {
     return struct {
         // Assuming page size
         base: u64,
-        // TODO: allocate IRQ properly
-        irq: u32 = 5,
+        irq: u32,
         device: Device,
         status: Status = 0,
         device_sel: bool = false,
@@ -90,73 +91,77 @@ pub fn VirtioMmio(comptime Device: type) type {
         const Self = @This();
 
         fn queue_num_max(self: *const Self) u32 {
-            return if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            return if (self.queue_sel < self.device.max_queues())
                 MAX_QUEUE_ELEMENTS
             else
                 0;
         }
 
         fn get_queue_ready(self: *const Self) u32 {
-            return if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            return if (self.queue_sel < self.device.max_queues())
                 self.virt_queues[self.queue_sel].ready
             else
                 0;
         }
 
         fn set_queue_ready(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            if (self.queue_sel < self.device.max_queues())
                 self.virt_queues[self.queue_sel].ready = val;
         }
 
         fn set_queue_num(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED and val <= MAX_QUEUE_ELEMENTS and std.math.isPowerOfTwo(val))
+            if (self.queue_sel < self.device.max_queues() and val <= MAX_QUEUE_ELEMENTS and std.math.isPowerOfTwo(val))
                 self.virt_queues[self.queue_sel].elements = val;
         }
 
         fn set_queue_desc_low(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            if (self.queue_sel < self.device.max_queues())
                 set_low(&self.virt_queues[self.queue_sel].desc_ring, val);
         }
 
         fn set_queue_desc_high(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            if (self.queue_sel < self.device.max_queues())
                 set_high(&self.virt_queues[self.queue_sel].desc_ring, val);
         }
 
         fn set_queue_avail_low(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            if (self.queue_sel < self.device.max_queues())
                 set_low(&self.virt_queues[self.queue_sel].available_ring, val);
         }
 
         fn set_queue_avail_high(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            if (self.queue_sel < self.device.max_queues())
                 set_high(&self.virt_queues[self.queue_sel].available_ring, val);
         }
 
         fn set_queue_used_low(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            if (self.queue_sel < self.device.max_queues())
                 set_low(&self.virt_queues[self.queue_sel].used_ring, val);
         }
 
         fn set_queue_used_high(self: *Self, val: u32) void {
-            if (self.queue_sel < MAX_QUEUES_SUPPORTED)
+            if (self.queue_sel < self.device.max_queues())
                 set_high(&self.virt_queues[self.queue_sel].used_ring, val);
         }
 
         fn notify_queue(self: *Self, idx: usize, io: std.Io) !void {
-            if (idx < MAX_QUEUES_SUPPORTED) {
-                var reqs = try self.virt_queues[self.queue_sel].kick(
+            if (idx < self.device.max_queues()) {
+                var reqs = try self.virt_queues[idx].kick(
                     self.vm.memory,
                     self.alloc.allocator(),
                 );
                 defer reqs.deinit(self.alloc.allocator());
 
+                self.mutex.unlock(io);
+
                 self.device.proccess_requests(reqs.items, io) catch {
                     @panic("todo");
                 };
 
+                try self.mutex.lock(io);
+
                 for (reqs.items) |req| {
-                    const res = self.virt_queues[self.queue_sel].push_used(
+                    const res = self.virt_queues[idx].push_used(
                         self.vm.memory,
                         req.head,
                         req.len,
@@ -172,6 +177,7 @@ pub fn VirtioMmio(comptime Device: type) type {
         pub fn new(base: u64, device: Device, vm: *Vm, irq: u32, alloc: std.mem.Allocator) Self {
             // TODO: replace all 4096 with arch page size
             std.debug.assert(std.mem.isAligned(base, 4096));
+            std.debug.assert(MAX_QUEUES_SUPPORTED >= device.max_queues());
 
             return .{
                 .base = base,

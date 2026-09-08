@@ -9,6 +9,7 @@ pub const c = @cImport({
 });
 
 const VIRTIO_BLK_F_RO: u32 = 1 << 5;
+const VIRTIO_BLK_F_MQ: u32 = 1 << 12;
 
 const VIRTIO_BLK_S_OK: u8 = 0;
 const VIRTIO_BLK_S_IOERR: u8 = 1;
@@ -41,6 +42,7 @@ pub const Block = struct {
 
         const stat = try file.stat(io);
         config.capacity = stat.size / 512;
+        config.num_queues = 4;
 
         return .{
             .config = config,
@@ -53,7 +55,11 @@ pub const Block = struct {
     }
 
     pub fn features() u32 {
-        return 0;
+        return VIRTIO_BLK_F_MQ;
+    }
+
+    pub fn max_queues(self: *const Self) u32 {
+        return self.config.num_queues;
     }
 
     pub fn proccess_requests(self: *Self, reqs: []queue.RequestChain, io: std.Io) !void {

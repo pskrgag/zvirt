@@ -106,9 +106,10 @@ pub const Uart = struct {
     lsr: Lsr = .{},
     iir: Iir = .{},
     thre_pending: bool = false,
-    storage: [128]u8 = undefined,
+    storage: [4096]u8 = undefined,
     rx_queue: std.Deque(u8) = undefined,
     irq: u32,
+    irq_set: bool = false,
 
     const Self = @This();
 
@@ -213,7 +214,11 @@ pub const Uart = struct {
         if (self.irq_enabled()) {
             self.iir.irq_not_pending = 0;
             self.iir.irq = irq;
-            try vm.irq_set(self.irq, true);
+
+            if (!self.irq_set) {
+                try vm.irq_set(self.irq, true);
+                self.irq_set = true;
+            }
         }
     }
 
@@ -221,12 +226,10 @@ pub const Uart = struct {
         self.iir.irq = .None;
         self.iir.irq_not_pending = 1;
         try vm.irq_set(self.irq, false);
+        self.irq_set = false;
     }
 
     fn write_reg_interal(self: *Self, reg: WriteRegister, data: u8, vm: *Vm, io: Io) !void {
-        // if (reg != .Thr)
-        //     log.debug("register write: reg={} value={}", .{ reg, data });
-
         switch (reg) {
             .Thr => {
                 try self.write_byte(data, io);
