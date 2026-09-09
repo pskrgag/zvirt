@@ -26,7 +26,7 @@ pub const EventFd = struct {
 
     fn new_with_flags(initial_value: u32, flags: u32) !Self {
         const rc = linux.eventfd(initial_value, flags);
-        switch (posix.errno(rc)) {
+        switch (linux.errno(rc)) {
             .SUCCESS => return .{ .fd = @intCast(rc) },
             else => |err| return posix.unexpectedErrno(err),
         }
@@ -34,7 +34,7 @@ pub const EventFd = struct {
 
     pub fn deinit(self: *Self) void {
         const rc = linux.close(self.fd);
-        std.debug.assert(posix.errno(rc) == .SUCCESS);
+        std.debug.assert(linux.errno(rc) == .SUCCESS);
         self.* = undefined;
     }
 
@@ -52,7 +52,7 @@ pub const EventFd = struct {
             std.mem.asBytes(&value).ptr,
             @sizeOf(u64),
         );
-        switch (posix.errno(rc)) {
+        switch (linux.errno(rc)) {
             .SUCCESS => std.debug.assert(rc == @sizeOf(u64)),
             .AGAIN => return error.WouldBlock,
             .INTR => return error.Interrupted,
@@ -67,7 +67,7 @@ pub const EventFd = struct {
             std.mem.asBytes(&value).ptr,
             @sizeOf(u64),
         );
-        switch (posix.errno(rc)) {
+        switch (linux.errno(rc)) {
             .SUCCESS => {
                 std.debug.assert(rc == @sizeOf(u64));
                 return value;

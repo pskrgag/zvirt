@@ -8,6 +8,7 @@ const Vm = @import("../../root.zig").Vm;
 const VirtioDevice = @import("../../device/root.zig").VirtioDevice;
 const layout = @import("layout.zig");
 const IrqAllocator = @import("vm.zig").IrqAllocator;
+const EventSource = @import("../../root.zig").EventSource;
 
 const io_bus_struct = @import("io_bus.zig");
 const mmio_bus_struct = @import("mmio_bus.zig");
@@ -26,8 +27,12 @@ pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
     self.io_bus.deinit();
 }
 
-pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
-    try self.io_bus.handle_event(id, vm, io);
+pub fn handle_event(self: *Self, source: EventSource, id: u29, vm: *Vm, io: std.Io) !void {
+    switch (source) {
+        .io_bus => try self.io_bus.handle_event(id, vm, io),
+        .virtio => try self.mmio_bus.handle_event(id, vm, io),
+        else => unreachable,
+    }
 }
 
 pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
@@ -56,15 +61,16 @@ pub fn setup_devices(
 
         errdefer irq_alloc.free(irq);
 
-        self.mmio_bus.register_device(
-            try VirtioDevice.new(
-                base,
-                .{ .BlockDevice = config.block_device },
-                vm,
-                @truncate(irq),
-                alloc,
-                io,
-            ),
+        var dev = try VirtioDevice.new(
+            base,
+            .{ .BlockDevice = config.block_device },
+            vm,
+            @truncate(irq),
+            alloc,
+            io,
         );
+        errdefer dev.deinit(io);
+
+        try self.mmio_bus.register_device(vm, dev);
     }
 }

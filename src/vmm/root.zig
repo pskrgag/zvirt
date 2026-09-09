@@ -28,9 +28,10 @@ var kvm_system = lazy(kvm.Kvm, kvm.Kvm.init);
 
 const StopFlag = std.atomic.Value(bool);
 
-const EventSource = enum(u3) {
+pub const EventSource = enum(u3) {
     vcpu,
     io_bus,
+    virtio,
 };
 
 const EventToken = packed struct(u64) {
@@ -275,8 +276,8 @@ pub const Vm = struct {
                             break;
                         }
                     },
-                    .io_bus => {
-                        try self.archvm.device_bus.handle_event(token.id, self, io);
+                    .io_bus, .virtio => {
+                        try self.archvm.device_bus.handle_event(token.source, token.id, self, io);
                     },
                 }
             }
@@ -1089,4 +1090,5 @@ test "SMP works" {
 
 test {
     _ = @import("image/root.zig");
+    _ = @import("io/root.zig");
 }

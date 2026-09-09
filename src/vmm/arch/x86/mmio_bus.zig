@@ -6,12 +6,18 @@ const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
 const VirtioDevice = @import("../../device/root.zig").VirtioDevice;
 const log = std.log.scoped(.mmio_bus);
+const Vm = @import("../../root.zig").Vm;
 
 pub const MAX_DEVICES = 10;
 const Self = @This();
 
 buffer: [MAX_DEVICES]VirtioDevice,
 virtio_devs: std.ArrayList(VirtioDevice),
+
+pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
+    _ = vm;
+    try self.virtio_devs.items[id].handle_event(io);
+}
 
 pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     // log.debug("access: {any}", .{mmio_request});
@@ -60,6 +66,9 @@ pub fn new(alloc: std.mem.Allocator) !*Self {
     return self;
 }
 
-pub fn register_device(self: *Self, dev: VirtioDevice) void {
+pub fn register_device(self: *Self, vm: *Vm, dev: VirtioDevice) !void {
+    const id = self.virtio_devs.items.len;
     self.virtio_devs.appendAssumeCapacity(dev);
+
+    try vm.register_fd(dev.event_source(), @truncate(id), .virtio);
 }

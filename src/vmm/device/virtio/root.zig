@@ -58,7 +58,7 @@ const VIRTIO_IRQ_CONFIG_CHANGE: u32 = 1 << 1;
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 const Status = u32;
 
-const MAX_QUEUES_SUPPORTED = 16;
+const MAX_QUEUES_SUPPORTED = 1;
 
 fn set_low(value: *u64, low: u32) void {
     value.* = (value.* & 0xffff_ffff_0000_0000) | @as(u64, low);
@@ -152,25 +152,30 @@ pub fn VirtioMmio(comptime Device: type) type {
                 );
                 defer reqs.deinit(self.alloc.allocator());
 
-                self.mutex.unlock(io);
-
                 self.device.proccess_requests(reqs.items, io) catch {
                     @panic("todo");
                 };
 
-                try self.mutex.lock(io);
+                var completed: usize = 0;
 
                 for (reqs.items) |req| {
-                    const res = self.virt_queues[idx].push_used(
-                        self.vm.memory,
-                        req.head,
-                        req.len,
-                    );
-                    std.debug.assert(res);
+                    // Len == 0 means that request will be handled in async
+                    if (req.len != 0) {
+                        const res = self.virt_queues[idx].push_used(
+                            self.vm.memory,
+                            req.head,
+                            req.len,
+                        );
+                        std.debug.assert(res);
+
+                        completed += 1;
+                    }
                 }
 
-                self.irq_state |= VIRTIO_IRQ_USED_RING;
-                try self.vm.irq_set(self.irq, true);
+                if (completed != 0) {
+                    self.irq_state |= VIRTIO_IRQ_USED_RING;
+                    try self.vm.irq_set(self.irq, true);
+                }
             }
         }
 
@@ -297,6 +302,31 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
+        pub fn handle_event(self: *Self, io: std.Io) !void {
+            try self.mutex.lock(io);
+            defer self.mutex.unlock(io);
+
+            try self.device.ack_event();
+
+            var consumed = false;
+
+            while (try self.device.pop_completion()) |async_result| {
+                const res = self.virt_queues[0].push_used(
+                    self.vm.memory,
+                    async_result.head,
+                    async_result.len,
+                );
+                std.debug.assert(res);
+
+                consumed = true;
+            }
+
+            if (consumed) {
+                self.irq_state |= VIRTIO_IRQ_USED_RING;
+                try self.vm.irq_set(self.irq, true);
+            }
+        }
+
         pub fn deinit(self: *Self, io: std.Io) void {
             self.device.deinit(io);
             self.alloc.deinit();
@@ -330,6 +360,18 @@ pub const VirtioDevice = union(enum) {
                     alloc,
                 ),
             },
+        };
+    }
+
+    pub fn handle_event(self: *Self, io: std.Io) !void {
+        return switch (self.*) {
+            inline else => |*device| device.handle_event(io),
+        };
+    }
+
+    pub fn event_source(self: *const Self) std.posix.fd_t {
+        return switch (self.*) {
+            inline else => |*device| device.device.event_source(),
         };
     }
 
