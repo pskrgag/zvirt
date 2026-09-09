@@ -92,7 +92,7 @@ pub const Block = struct {
         const token = &self.requests[comp.token];
         defer self.bitmap.free(comp.token);
 
-        // log.debug("Async event finished {}\n", .{comp});
+        log.debug("Async event finished {}\n", .{comp});
 
         var len: u32 = 1;
         if (comp.res > 0) {
@@ -171,7 +171,7 @@ pub const Block = struct {
                 errdefer self.bitmap.free(id);
 
                 try self.engine.register_read(self.file.handle, to_write, blkreq.sector * 512, id);
-                // log.debug("Registered async read {}\n", .{id});
+                log.debug("Registered async read {}\n", .{id});
                 return null;
             },
             .Write => {
@@ -185,7 +185,7 @@ pub const Block = struct {
                 errdefer self.bitmap.free(id);
 
                 try self.engine.register_write(self.file.handle, to_read, blkreq.sector * 512, id);
-                // log.debug("Registered async write {}\n", .{id});
+                log.debug("Registered async write {}\n", .{id});
                 return null;
             },
             .Flush => {
