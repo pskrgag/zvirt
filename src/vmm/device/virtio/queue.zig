@@ -97,7 +97,7 @@ pub const RequestChain = struct {
 pub const MAX_QUEUE_ELEMENTS = 256;
 
 pub const VirtQueue = struct {
-    ready: u32 = 0,
+    is_ready: u32 = 0,
     elements: u32 = MAX_QUEUE_ELEMENTS,
 
     last_avail_idx: u16 = 0,
@@ -109,6 +109,10 @@ pub const VirtQueue = struct {
     desc_ring: u64 = std.math.maxInt(u64),
     available_ring: u64 = std.math.maxInt(u64),
     used_ring: u64 = std.math.maxInt(u64),
+
+    used_ring_ptr: *UsedRingHeader = undefined,
+    descr_ring_ptr: []Descriptor = undefined,
+    avail_ring_ptr: *AvailableRing = undefined,
 
     const Self = @This();
 
@@ -199,19 +203,31 @@ pub const VirtQueue = struct {
         return chain;
     }
 
+    pub fn ready(self: *Self, mem: *GuestMemory, is_ready: u32) !void {
+        if (is_ready != 0) {
+            self.avail_ring_ptr = self.avail_ring(mem) orelse return error.InvalidAddr;
+            self.descr_ring_ptr = self.descr_ring(mem) orelse return error.InvalidAddr;
+            self.used_ring_ptr = self.get_used_ring(mem) orelse return error.InvalidAddr;
+        }
+
+        self.is_ready = is_ready;
+    }
+
     pub fn kick(self: *Self, mem: *GuestMemory, alloc: std.mem.Allocator) !std.ArrayList(RequestChain) {
         var res = try std.ArrayList(RequestChain).initCapacity(alloc, 0);
-        const avail_header = self.avail_ring(mem) orelse return res;
-        const slots = avail_header.slots(self.elements);
-        const dring = self.descr_ring(mem) orelse return res;
+        const slots = self.avail_ring_ptr.slots(self.elements);
 
-        while (self.last_avail_idx != avail_header.idx.load(.acquire)) {
+        while (self.last_avail_idx != self.avail_ring_ptr.idx.load(.acquire)) {
             const slot = self.last_avail_idx % self.elements;
             const descriptor_head = slots[slot];
 
             self.last_avail_idx +%= 1;
 
-            try res.append(alloc, self.process_descriptor_chain(descriptor_head, mem, dring).?);
+            try res.append(alloc, self.process_descriptor_chain(
+                descriptor_head,
+                mem,
+                self.descr_ring_ptr,
+            ).?);
         }
 
         return res;
@@ -257,6 +273,8 @@ test "kick returns a descriptor chain in descriptor order" {
     available.slots(queue.elements)[0] = 0;
     available.idx.store(1, .release);
 
+    try queue.ready(mem, 1);
+
     var chains = try queue.kick(mem, alloc);
     defer chains.deinit(alloc);
 
@@ -297,6 +315,8 @@ test "kick consumes each available entry once" {
     available.slots(queue.elements)[0] = 0;
     available.slots(queue.elements)[1] = 1;
     available.idx.store(2, .release);
+
+    try queue.ready(mem, 1);
 
     var first = try queue.kick(mem, alloc);
     defer first.deinit(alloc);

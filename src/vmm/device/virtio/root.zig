@@ -102,14 +102,14 @@ pub fn VirtioMmio(comptime Device: type) type {
 
         fn get_queue_ready(self: *const Self) u32 {
             return if (self.queue_sel < self.device.max_queues())
-                self.virt_queues[self.queue_sel].ready
+                self.virt_queues[self.queue_sel].is_ready
             else
                 0;
         }
 
-        fn set_queue_ready(self: *Self, val: u32) void {
+        fn set_queue_ready(self: *Self, val: u32) !void {
             if (self.queue_sel < self.device.max_queues())
-                self.virt_queues[self.queue_sel].ready = val;
+                try self.virt_queues[self.queue_sel].ready(self.vm.memory, val);
         }
 
         fn set_queue_num(self: *Self, val: u32) void {
@@ -278,7 +278,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                     },
                     .DeviceFeaturesSel => self.device_sel = data != 0,
                     .DriverFeaturesSel => self.driver_sel = data != 0,
-                    .QueueReady => self.set_queue_ready(data),
+                    .QueueReady => try self.set_queue_ready(data),
                     .QueueNum => self.set_queue_num(data),
                     .QueueDescLow => self.set_queue_desc_low(data),
                     .QueueDescHigh => self.set_queue_desc_high(data),
@@ -315,6 +315,7 @@ pub fn VirtioMmio(comptime Device: type) type {
             try self.device.ack_event();
 
             var consumed = false;
+            var batch: usize = 0;
 
             while (try self.device.pop_completion()) |async_result| {
                 const res = self.virt_queues[0].push_used(
@@ -324,10 +325,12 @@ pub fn VirtioMmio(comptime Device: type) type {
                 );
                 std.debug.assert(res);
 
+                batch += 1;
                 consumed = true;
             }
 
             if (consumed) {
+                log.debug("batched {}\n", .{batch});
                 self.irq_state |= VIRTIO_IRQ_USED_RING;
                 try self.irqfd.notify();
             }
