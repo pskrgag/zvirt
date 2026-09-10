@@ -29,14 +29,14 @@ pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
 
 pub fn handle_event(self: *Self, source: EventSource, id: u29, vm: *Vm, io: std.Io) !void {
     switch (source) {
-        .io_bus => try self.io_bus.handle_event(id, vm, io),
+        .io_bus => try self.io_bus.handle_event(id, io),
         .virtio => try self.mmio_bus.handle_event(id, vm, io),
         else => unreachable,
     }
 }
 
-pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
-    return self.io_bus.handle_io(io_request, vm, io);
+pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
+    return self.io_bus.handle_io(io_request, io);
 }
 
 pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {

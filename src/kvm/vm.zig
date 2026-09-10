@@ -2,12 +2,14 @@
 
 const c = @import("abi.zig").c;
 
+const utils = @import("utils");
 const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const Vcpu = @import("vcpu.zig").Vcpu;
 const ioctl = @import("ioctl.zig").ioctl;
 const cpuid = @import("cpuid.zig");
+const EventFd = utils.EventFd.EventFd;
 
 pub const GuestPhysicalAddress = u64;
 
@@ -47,6 +49,15 @@ pub const Vm = struct {
         const config = c.kvm_pit_config{};
 
         _ = try ioctl(self.fd, c.KVM_CREATE_PIT2, @intFromPtr(&config));
+    }
+
+    pub fn register_irq(self: *const Self, eventfd: *const EventFd, num: u32) !void {
+        const arg = c.kvm_irqfd{
+            .fd = @intCast(eventfd.as_fd()),
+            .gsi = num,
+        };
+
+        _ = try ioctl(self.fd, c.KVM_IRQFD, @intFromPtr(&arg));
     }
 
     pub fn irq_set(self: *const Self, num: u32, set: bool) !void {

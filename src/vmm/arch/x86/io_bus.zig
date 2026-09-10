@@ -61,7 +61,7 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
         else
             3,
     };
-    self.com[index].?.init();
+    try self.com[index].?.init(vm);
 
     if (console.input) |in|
         try vm.register_fd(in.handle, @intCast(index), .io_bus);
@@ -77,9 +77,14 @@ pub fn deinit(self: *Self) void {
         if (orig) |o|
             posix.tcsetattr(self.com[i].?.out.handle, .NOW, o) catch @panic("failed to restore term");
     }
+
+    for (&self.com) |*com| {
+        if (com.*) |*c|
+            c.deinit();
+    }
 }
 
-pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
+pub fn handle_event(self: *Self, id: u29, io: std.Io) !void {
     if (id >= MAX_COMS)
         return error.InvalidComIndex;
 
@@ -88,13 +93,12 @@ pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
     defer self.com_mutex[index].unlock(io);
 
     if (self.com[index]) |*com|
-        try com.handle_event(vm, io);
+        try com.handle_event(io);
 }
 
 fn handle_com(
     self: *Self,
     io_request: anytype,
-    vm: *Vm,
     idx: usize,
     offset: usize,
     io: std.Io,
@@ -120,13 +124,11 @@ fn handle_com(
             try com.write_reg(
                 std.enums.fromInt(device.uart_16550.Register, offset).?,
                 data[0],
-                vm,
                 io,
             );
         } else {
             const res = try com.read_reg(
                 std.enums.fromInt(device.uart_16550.Register, offset).?,
-                vm,
                 io,
             );
 
@@ -138,7 +140,7 @@ fn handle_com(
     }
 }
 
-pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
+pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
     const data_len =
         @as(usize, io_request.size) *
@@ -149,22 +151,22 @@ pub fn handle_io(self: *Self, io_request: anytype, vm: *Vm, io: std.Io) !bool {
     return switch (io_request.port) {
         // UART (COM1)
         0x3f8...0x3ff => {
-            try self.handle_com(io_request, vm, 0, io_request.port - 0x3f8, io);
+            try self.handle_com(io_request, 0, io_request.port - 0x3f8, io);
             return false;
         },
         // UART (COM2)
         0x2f8...0x2ff => {
-            try self.handle_com(io_request, vm, 1, io_request.port - 0x2f8, io);
+            try self.handle_com(io_request, 1, io_request.port - 0x2f8, io);
             return false;
         },
         // UART (COM3)
         0x3e8...0x3ef => {
-            try self.handle_com(io_request, vm, 2, io_request.port - 0x3e8, io);
+            try self.handle_com(io_request, 2, io_request.port - 0x3e8, io);
             return false;
         },
         // UART (COM4)
         0x2e8...0x2ef => {
-            try self.handle_com(io_request, vm, 3, io_request.port - 0x2e8, io);
+            try self.handle_com(io_request, 3, io_request.port - 0x2e8, io);
             return false;
         },
         // Special port to indicate test exit

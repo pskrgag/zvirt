@@ -6,6 +6,8 @@ const VirtQueue = @import("queue.zig").VirtQueue;
 const MAX_QUEUE_ELEMENTS = @import("queue.zig").MAX_QUEUE_ELEMENTS;
 const Vm = @import("../../root.zig").Vm;
 const Mutex = std.Io.Mutex;
+const utils = @import("utils");
+const EventFd = utils.EventFd.EventFd;
 
 const log = std.log.scoped(.virtio);
 
@@ -87,6 +89,7 @@ pub fn VirtioMmio(comptime Device: type) type {
         irq_state: u32 = 0,
         alloc: std.heap.ArenaAllocator,
         mutex: Mutex = Mutex.init,
+        irqfd: EventFd,
 
         const Self = @This();
 
@@ -174,17 +177,23 @@ pub fn VirtioMmio(comptime Device: type) type {
 
                 if (completed != 0) {
                     self.irq_state |= VIRTIO_IRQ_USED_RING;
-                    try self.vm.irq_set(self.irq, true);
+                    try self.irqfd.notify();
                 }
             }
         }
 
-        pub fn new(base: u64, device: Device, vm: *Vm, irq: u32, alloc: std.mem.Allocator) Self {
+        pub fn new(base: u64, device: Device, vm: *Vm, irq: u32, alloc: std.mem.Allocator) !Self {
             // TODO: replace all 4096 with arch page size
             std.debug.assert(std.mem.isAligned(base, 4096));
             std.debug.assert(MAX_QUEUES_SUPPORTED >= device.max_queues());
 
+            var irqfd = try EventFd.new(1);
+            errdefer irqfd.deinit();
+
+            try vm.register_irq(&irqfd, irq);
+
             return .{
+                .irqfd = irqfd,
                 .base = base,
                 .irq = irq,
                 .device = device,
@@ -266,9 +275,6 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .Status => self.status = data,
                     .InterruptAck => {
                         self.irq_state &= ~data;
-
-                        if (self.irq_state == 0)
-                            try self.vm.irq_set(self.irq, false);
                     },
                     .DeviceFeaturesSel => self.device_sel = data != 0,
                     .DriverFeaturesSel => self.driver_sel = data != 0,
@@ -323,11 +329,12 @@ pub fn VirtioMmio(comptime Device: type) type {
 
             if (consumed) {
                 self.irq_state |= VIRTIO_IRQ_USED_RING;
-                try self.vm.irq_set(self.irq, true);
+                try self.irqfd.notify();
             }
         }
 
         pub fn deinit(self: *Self, io: std.Io) void {
+            self.irqfd.deinit();
             self.device.deinit(io);
             self.alloc.deinit();
         }
@@ -352,7 +359,7 @@ pub const VirtioDevice = union(enum) {
     ) !Self {
         return switch (kind) {
             .BlockDevice => |path| .{
-                .block = VirtioMmio(Block).new(
+                .block = try VirtioMmio(Block).new(
                     base_address,
                     try Block.new(path, io),
                     vm,

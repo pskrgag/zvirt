@@ -5,6 +5,8 @@ const linux = std.os.linux;
 const posix = std.posix;
 const EventFd = @import("utils").EventFd.EventFd;
 
+const log = std.log.scoped(.io_uring);
+
 fn token_to_u64(token: anytype) u64 {
     const T = @TypeOf(token);
 
@@ -83,7 +85,9 @@ pub const FileEngine = struct {
     }
 
     pub fn submit(self: *Self) !void {
-        _ = try self.uring.submit();
+        const count = try self.uring.submit();
+
+        log.debug("submitted {} entries\n", .{count});
     }
 
     pub fn register_write(
@@ -127,6 +131,7 @@ fn wait_for_test_event(engine: *FileEngine) !void {
 
     var events: [1]linux.epoll_event = undefined;
     const ready = try epoll.wait(&events, 1000);
+
     try std.testing.expectEqual(@as(usize, 1), ready.len);
     try std.testing.expect(ready[0].events & linux.EPOLL.IN != 0);
     try engine.ack_event();

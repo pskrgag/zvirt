@@ -156,8 +156,8 @@ pub const Vm = struct {
         try self.archvm.attach_console(&console, self);
     }
 
-    pub fn irq_set(self: *Self, num: u32, set: bool) !void {
-        try self.vm.irq_set(num, set);
+    pub fn register_irq(self: *Self, eventfd: *const EventFd, num: u32) !void {
+        try self.vm.register_irq(eventfd, num);
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {

@@ -1,6 +1,8 @@
 //! Virtual UART
 
 const std = @import("std");
+const EventFd = utils.EventFd.EventFd;
+const utils = @import("utils");
 const File = std.Io.File;
 const Io = std.Io;
 const log = std.log.scoped(.uart_16550);
@@ -109,15 +111,24 @@ pub const Uart = struct {
     storage: [4096]u8 = undefined,
     rx_queue: std.Deque(u8) = undefined,
     irq: u32,
+    irqfd: EventFd = undefined,
     irq_set: bool = false,
 
     const Self = @This();
 
-    pub fn init(self: *Self) void {
+    pub fn init(self: *Self, vm: *Vm) !void {
+        self.irqfd = try EventFd.new(0);
+        errdefer self.irqfd.deinit();
+
+        try vm.register_irq(&self.irqfd, self.irq);
         self.rx_queue = std.Deque(u8).initBuffer(&self.storage);
     }
 
-    pub fn handle_event(self: *Self, vm: *Vm, io: std.Io) !void {
+    pub fn deinit(self: *Self) void {
+        self.irqfd.deinit();
+    }
+
+    pub fn handle_event(self: *Self, io: std.Io) !void {
         while (true) {
             var buffer: [1024]u8 = undefined;
             var buffers: [1][]u8 = .{buffer[0..]};
@@ -125,21 +136,21 @@ pub const Uart = struct {
             // Unwrap here, since it this function must not be called if there is no
             // input source
             const read = try self.in.?.readStreaming(io, &buffers);
-            try self.push_rx_bytes(buffer[0..read], vm);
+            try self.push_rx_bytes(buffer[0..read]);
 
             if (read < 1024)
                 break;
         }
     }
 
-    fn push_rx_bytes(self: *Self, bytes: []const u8, vm: *Vm) !void {
+    fn push_rx_bytes(self: *Self, bytes: []const u8) !void {
         for (bytes) |byte| {
             self.rx_queue.pushBackBounded(byte) catch @panic("todo");
         }
 
         if (self.rx_queue.len > 0) {
             self.lsr.data_ready = 1;
-            try self.update_irq(vm);
+            try self.update_irq();
         }
     }
 
@@ -163,11 +174,11 @@ pub const Uart = struct {
         return null;
     }
 
-    fn update_irq(self: *Self, vm: *Vm) !void {
+    fn update_irq(self: *Self) !void {
         if (self.pending_irq()) |pending| {
-            try self.set_irq(pending, vm);
+            try self.set_irq(pending);
         } else {
-            try self.clear_irq(vm);
+            try self.clear_irq();
         }
     }
 
@@ -210,35 +221,34 @@ pub const Uart = struct {
         };
     }
 
-    fn set_irq(self: *Self, irq: Irq, vm: *Vm) !void {
+    fn set_irq(self: *Self, irq: Irq) !void {
         if (self.irq_enabled()) {
             self.iir.irq_not_pending = 0;
             self.iir.irq = irq;
 
             if (!self.irq_set) {
-                try vm.irq_set(self.irq, true);
+                try self.irqfd.notify();
                 self.irq_set = true;
             }
         }
     }
 
-    fn clear_irq(self: *Self, vm: *Vm) !void {
+    fn clear_irq(self: *Self) !void {
         self.iir.irq = .None;
         self.iir.irq_not_pending = 1;
-        try vm.irq_set(self.irq, false);
         self.irq_set = false;
     }
 
-    fn write_reg_interal(self: *Self, reg: WriteRegister, data: u8, vm: *Vm, io: Io) !void {
+    fn write_reg_interal(self: *Self, reg: WriteRegister, data: u8, io: Io) !void {
         switch (reg) {
             .Thr => {
                 try self.write_byte(data, io);
                 self.thre_pending = true;
-                try self.update_irq(vm);
+                try self.update_irq();
             },
             .Ier => {
                 self.ier = @bitCast(data);
-                try self.update_irq(vm);
+                try self.update_irq();
             },
             .Fcr => {},
             .Lcr => {
@@ -252,14 +262,14 @@ pub const Uart = struct {
         }
     }
 
-    fn read_reg_interal(self: *Self, reg: ReadRegister, vm: *Vm, io: Io) !u8 {
+    fn read_reg_interal(self: *Self, reg: ReadRegister, io: Io) !u8 {
         _ = io;
 
         return switch (reg) {
             .Rbr => blk: {
                 const res = self.pop_rx_byte();
 
-                try self.update_irq(vm);
+                try self.update_irq();
                 break :blk res;
             },
             .Ier => @bitCast(self.ier),
@@ -270,7 +280,7 @@ pub const Uart = struct {
                     std.debug.assert(self.thre_pending);
                     self.thre_pending = false;
 
-                    try self.update_irq(vm);
+                    try self.update_irq();
                 }
 
                 break :blk res;
@@ -285,15 +295,15 @@ pub const Uart = struct {
         };
     }
 
-    pub fn write_reg(self: *Self, reg: Register, data: u8, vm: *Vm, io: Io) !void {
+    pub fn write_reg(self: *Self, reg: Register, data: u8, io: Io) !void {
         const mapped = try self.get_write_register(reg);
 
-        return self.write_reg_interal(mapped, data, vm, io);
+        return self.write_reg_interal(mapped, data, io);
     }
 
-    pub fn read_reg(self: *Self, reg: Register, vm: *Vm, io: Io) !u8 {
+    pub fn read_reg(self: *Self, reg: Register, io: Io) !u8 {
         const mapped = self.get_read_register(reg);
 
-        return self.read_reg_interal(mapped, vm, io);
+        return self.read_reg_interal(mapped, io);
     }
 };

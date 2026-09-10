@@ -9,6 +9,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const profile = b.option(bool, "profile", "Preserve frame pointers for perf profiling") orelse false;
     const test_filters = b.option(
         []const []const u8,
         "test-filter",
@@ -32,6 +33,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{
             .{ .name = "test_utils", .module = test_utils },
+            .{ .name = "utils", .module = utils },
         },
     });
 
@@ -100,6 +102,14 @@ pub fn build(b: *std.Build) void {
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
+    if (profile) {
+        for ([_]*std.Build.Module{ exe.root_module, mod, vmm, kvm, utils, test_utils, cli.module("cli") }) |module| {
+            module.omit_frame_pointer = false;
+            module.unwind_tables = .async;
+            module.strip = false;
+        }
+    }
+
     b.installArtifact(exe);
 
     // This creates a top level step. Top level steps have a name and can be
