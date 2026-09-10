@@ -90,6 +90,7 @@ pub fn VirtioMmio(comptime Device: type) type {
         alloc: std.heap.ArenaAllocator,
         mutex: Mutex = Mutex.init,
         irqfd: EventFd,
+        notifyfds: [MAX_QUEUES_SUPPORTED]EventFd = undefined,
 
         const Self = @This();
 
@@ -153,6 +154,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                     self.vm.memory,
                     self.alloc.allocator(),
                 );
+                defer _ = self.alloc.reset(.retain_capacity);
                 defer reqs.deinit(self.alloc.allocator());
 
                 self.device.proccess_requests(reqs.items, io) catch {
@@ -165,7 +167,6 @@ pub fn VirtioMmio(comptime Device: type) type {
                     // Len == 0 means that request will be handled in async
                     if (req.len != 0) {
                         const res = self.virt_queues[idx].push_used(
-                            self.vm.memory,
                             req.head,
                             req.len,
                         );
@@ -192,8 +193,21 @@ pub fn VirtioMmio(comptime Device: type) type {
 
             try vm.register_irq(&irqfd, irq);
 
+            var notifyfds: [MAX_QUEUES_SUPPORTED]EventFd = undefined;
+            var notifyfd_count: usize = 0;
+
+            errdefer for (notifyfds[0..notifyfd_count]) |*notifyfd| {
+                notifyfd.deinit();
+            };
+
+            while (notifyfd_count < device.max_queues()) {
+                notifyfds[notifyfd_count] = try EventFd.new(0);
+                notifyfd_count += 1;
+            }
+
             return .{
                 .irqfd = irqfd,
+                .notifyfds = notifyfds,
                 .base = base,
                 .irq = irq,
                 .device = device,
@@ -308,10 +322,7 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        pub fn handle_event(self: *Self, io: std.Io) !void {
-            try self.mutex.lock(io);
-            defer self.mutex.unlock(io);
-
+        fn handle_completion_event(self: *Self) !void {
             try self.device.ack_event();
 
             var consumed = false;
@@ -319,7 +330,6 @@ pub fn VirtioMmio(comptime Device: type) type {
 
             while (try self.device.pop_completion()) |async_result| {
                 const res = self.virt_queues[0].push_used(
-                    self.vm.memory,
                     async_result.head,
                     async_result.len,
                 );
@@ -336,7 +346,46 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
+        pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
+            try vm.register_fd(self.device.event_source(), id, .virtio);
+
+            for (self.notifyfds[0..self.device.max_queues()], 0..) |notifyfd, queue_idx| {
+                try vm.register_ioevent(
+                    &notifyfd,
+                    self.base + @intFromEnum(MmioRegister.QueueNotify),
+                    @sizeOf(u32),
+                    queue_idx,
+                );
+
+                try vm.register_fd(notifyfd.as_fd(), id, .virtio);
+            }
+        }
+
+        pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+            try self.mutex.lock(io);
+            defer self.mutex.unlock(io);
+
+            if (fd == self.device.event_source()) {
+                try self.handle_completion_event();
+                return;
+            }
+
+            for (self.notifyfds[0..self.device.max_queues()], 0..) |notifyfd, queue_idx| {
+                if (notifyfd.as_fd() == fd) {
+                    _ = try notifyfd.read();
+                    try self.notify_queue(queue_idx, io);
+                    return;
+                }
+            }
+
+            return error.UnknownNotifyEvent;
+        }
+
         pub fn deinit(self: *Self, io: std.Io) void {
+            for (self.notifyfds[0..self.device.max_queues()]) |*notifyfd| {
+                notifyfd.deinit();
+            }
+
             self.irqfd.deinit();
             self.device.deinit(io);
             self.alloc.deinit();
@@ -373,15 +422,15 @@ pub const VirtioDevice = union(enum) {
         };
     }
 
-    pub fn handle_event(self: *Self, io: std.Io) !void {
+    pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
         return switch (self.*) {
-            inline else => |*device| device.handle_event(io),
+            inline else => |*device| device.handle_event(fd, io),
         };
     }
 
-    pub fn event_source(self: *const Self) std.posix.fd_t {
+    pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
         return switch (self.*) {
-            inline else => |*device| device.device.event_source(),
+            inline else => |*device| device.register_events(vm, id),
         };
     }
 

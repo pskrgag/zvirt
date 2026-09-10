@@ -127,11 +127,10 @@ pub const VirtQueue = struct {
 
     pub fn push_used(
         self: *Self,
-        mem: *GuestMemory,
         descriptor_head: u16,
         written_len: u32,
     ) bool {
-        const header = self.get_used_ring(mem) orelse return false;
+        const header = self.used_ring_ptr;
         const slots = header.slots(self.elements);
         const slot = self.next_used_idx % @as(u16, @intCast(self.elements));
 
@@ -345,15 +344,17 @@ test "push_used publishes used elements and advances idx" {
         .used_ring = 0x300,
     };
 
+    try queue.ready(mem, 1);
+
     const used = queue.get_used_ring(mem).?;
     used.* = .{ .flags = 0, .idx = Value(u16).init(0) };
 
-    try std.testing.expect(queue.push_used(mem, 7, 513));
+    try std.testing.expect(queue.push_used(7, 513));
     try std.testing.expectEqual(@as(u16, 1), used.idx.load(.acquire));
     try std.testing.expectEqual(@as(u32, 7), used.slots(queue.elements)[0].id);
     try std.testing.expectEqual(@as(u32, 513), used.slots(queue.elements)[0].len);
 
-    try std.testing.expect(queue.push_used(mem, 3, 1));
+    try std.testing.expect(queue.push_used(3, 1));
     try std.testing.expectEqual(@as(u16, 2), used.idx.load(.acquire));
     try std.testing.expectEqual(@as(u32, 3), used.slots(queue.elements)[1].id);
     try std.testing.expectEqual(@as(u32, 1), used.slots(queue.elements)[1].len);

@@ -27,10 +27,16 @@ pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
     self.io_bus.deinit();
 }
 
-pub fn handle_event(self: *Self, source: EventSource, id: u29, vm: *Vm, io: std.Io) !void {
+pub fn handle_event(
+    self: *Self,
+    source: EventSource,
+    id: u29,
+    fd: std.posix.fd_t,
+    io: std.Io,
+) !void {
     switch (source) {
         .io_bus => try self.io_bus.handle_event(id, io),
-        .virtio => try self.mmio_bus.handle_event(id, vm, io),
+        .virtio => try self.mmio_bus.handle_event(id, fd, io),
         else => unreachable,
     }
 }

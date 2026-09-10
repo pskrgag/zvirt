@@ -60,6 +60,24 @@ pub const Vm = struct {
         _ = try ioctl(self.fd, c.KVM_IRQFD, @intFromPtr(&arg));
     }
 
+    pub fn register_ioevent(
+        self: *const Self,
+        eventfd: *const EventFd,
+        address: u64,
+        len: u32,
+        datamatch: u64,
+    ) !void {
+        const arg = c.kvm_ioeventfd{
+            .datamatch = datamatch,
+            .addr = address,
+            .len = len,
+            .fd = @intCast(eventfd.as_fd()),
+            .flags = c.KVM_IOEVENTFD_FLAG_DATAMATCH,
+        };
+
+        _ = try ioctl(self.fd, c.KVM_IOEVENTFD, @intFromPtr(&arg));
+    }
+
     pub fn irq_set(self: *const Self, num: u32, set: bool) !void {
         var irq = c.kvm_irq_level{
             .unnamed_0 = .{ .irq = num },

@@ -160,6 +160,16 @@ pub const Vm = struct {
         try self.vm.register_irq(eventfd, num);
     }
 
+    pub fn register_ioevent(
+        self: *Self,
+        eventfd: *const EventFd,
+        address: u64,
+        len: u32,
+        datamatch: u64,
+    ) !void {
+        try self.vm.register_ioevent(eventfd, address, len, datamatch);
+    }
+
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         for (self.vcpus) |vcpu| {
             if (vcpu) |cpu|
@@ -277,7 +287,12 @@ pub const Vm = struct {
                         }
                     },
                     .io_bus, .virtio => {
-                        try self.archvm.device_bus.handle_event(token.source, token.id, self, io);
+                        try self.archvm.device_bus.handle_event(
+                            token.source,
+                            token.id,
+                            token.fd,
+                            io,
+                        );
                     },
                 }
             }

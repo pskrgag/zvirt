@@ -14,9 +14,13 @@ const Self = @This();
 buffer: [MAX_DEVICES]VirtioDevice,
 virtio_devs: std.ArrayList(VirtioDevice),
 
-pub fn handle_event(self: *Self, id: u29, vm: *Vm, io: std.Io) !void {
-    _ = vm;
-    try self.virtio_devs.items[id].handle_event(io);
+pub fn handle_event(
+    self: *Self,
+    id: u29,
+    fd: std.posix.fd_t,
+    io: std.Io,
+) !void {
+    try self.virtio_devs.items[id].handle_event(fd, io);
 }
 
 pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
@@ -68,7 +72,8 @@ pub fn new(alloc: std.mem.Allocator) !*Self {
 
 pub fn register_device(self: *Self, vm: *Vm, dev: VirtioDevice) !void {
     const id = self.virtio_devs.items.len;
-    self.virtio_devs.appendAssumeCapacity(dev);
 
-    try vm.register_fd(dev.event_source(), @truncate(id), .virtio);
+    try dev.register_events(vm, @truncate(id));
+
+    self.virtio_devs.appendAssumeCapacity(dev);
 }
