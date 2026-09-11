@@ -8,6 +8,7 @@ const Vm = @import("../../root.zig").Vm;
 const Mutex = std.Io.Mutex;
 const utils = @import("utils");
 const EventFd = utils.EventFd.EventFd;
+const PciConfigSpace = @import("../pci/config.zig").PciConfigSpace;
 
 const log = std.log.scoped(.virtio);
 
@@ -462,5 +463,10 @@ pub const VirtioDevice = union(enum) {
         return switch (self.*) {
             inline else => |*device| device.deinit(io),
         };
+    }
+
+    pub fn get_config(self: *Self) *PciConfigSpace {
+        _ = self;
+        @panic("todo virtio");
     }
 };

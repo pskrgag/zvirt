@@ -8,18 +8,33 @@ const Vm = @import("../../root.zig").Vm;
 const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const Mutex = std.Io.Mutex;
 const posix = std.posix;
+const pci = @import("../../device/pci/root.zig");
+const PciBus = pci.PciBus;
+const PciBridge = pci.PciBus;
+const PciAddress = pci.PciAddress;
 const log = std.log.scoped(.io_bus);
 
 const Self = @This();
 
 const MAX_COMS: usize = 4;
 
+const AddressPort = packed struct(u32) {
+    _reserved: u2 = 0,
+    register: u6 = 0,
+    function: u3 = 0,
+    device: u5 = 0,
+    bus: u8 = 0,
+    _reserved1: u7 = 0,
+    enable: u1 = 0,
+};
+
 com_mutex: [MAX_COMS]Mutex = @splat(Mutex.init),
 com: [MAX_COMS]?device.uart_16550.Uart = @splat(null),
 orig_tcattr: [MAX_COMS]?posix.termios = @splat(null),
 
-config_address: u32 = 0,
+pci_bus: PciBus = PciBus.new(pci.PciBridge.new()),
 cmos: device.cmos.Cmos = .{},
+address_port: AddressPort = std.mem.zeroes(AddressPort),
 
 fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
     const original = try posix.tcgetattr(fd);
@@ -207,21 +222,65 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
         0x87 => {
             return false;
         },
-
-        // PCI (which we don't support yet)
         0xcf8 => {
-            if (io_request.dir == .Out and io_request.size == 4) {
-                self.config_address = std.mem.readInt(u32, data[0..4], .little);
-                return false;
-            } else {
-                @panic("todo");
-            }
-        },
-        0xcfc...0xcff => {
-            if (io_request.dir == .In) {
-                std.mem.writeInt(u32, data_ptr[0..4], 0xFFFFFFFF, .little);
+            if (io_request.size != 4) {
+                return error.InvalidWrite;
             }
 
+            if (io_request.dir == .Out) {
+                self.address_port = @bitCast(std.mem.readInt(u32, data_ptr[0..4], .little));
+            } else {
+                std.mem.writeInt(u32, data_ptr[0..4], @bitCast(self.address_port), .little);
+            }
+
+            return false;
+        },
+        0xcfb => {
+            if (io_request.size != 1)
+                return error.InvalidWrite;
+
+            if (io_request.dir == .Out) {
+                self.address_port.enable = @intCast(std.mem.readInt(u8, data_ptr[0..1], .native) >> 7);
+            } else {
+                std.mem.writeInt(u8, data_ptr[0..1], @as(u8, self.address_port.enable) << 7, .little);
+            }
+
+            return false;
+        },
+
+        // For my own sanity:
+        //
+        // These guys work amazingly stupid.
+        //
+        // 0xcfc is the first byte of u32
+        // 0xcfd is the second byte of u32
+        // 0xcfe is the third byte of u32
+        // 0xcfd is the forth byte of u32
+        //
+        // 0xcfc supports 4/2/1 byte read, 0xcfd/0xcfe support 2/1 byte read. 0xcfd supports 1 byte
+        // read
+        //
+        // I don't want to move this shit into PCI level, so PCI always returns u32 and then io_bus
+        // returns needed part of the byte
+        0xcfc...0xcff => {
+            const data_start: u8 = @intCast(io_request.port - 0xcfc);
+            const data_end: u8 = data_start + io_request.size;
+
+            if (data_start + io_request.size > 4)
+                return error.InvalidWrite;
+
+            if (io_request.dir == .In) {
+                const register = self.address_port.register;
+                const reg_data = if (self.pci_bus.device(self.address_port.device)) |dev|
+                    try dev.read_config(register << 2)
+                else
+                    0xFFFFFFFF;
+
+                for (data_start..data_end, 0..) |byte, i| {
+                    const shift: u5 = @intCast(byte * 8);
+                    data_ptr[i] = @truncate(reg_data >> shift);
+                }
+            } else {}
             return false;
         },
         else => {
