@@ -59,6 +59,9 @@ pub const VmConfig = struct {
     // Cpu count
     smp: u8 = 1,
 
+    // PCI support
+    pci: bool = false,
+
     const Self = @This();
 
     fn verify(self: *const Self) !void {
@@ -114,7 +117,7 @@ pub const Vm = struct {
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
 
-        var archvm = try arch.ArchVm.new(allocator);
+        var archvm = try arch.ArchVm.new(&config,allocator);
         errdefer archvm.deinit(allocator, io);
 
         try archvm.setup_vm(&vm, mem, &config, allocator);

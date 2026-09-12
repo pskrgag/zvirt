@@ -5,6 +5,7 @@ const device = @import("../../device/root.zig");
 const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
 const Vm = @import("../../root.zig").Vm;
+const VmConfig = @import("../../root.zig").VmConfig;
 const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const Mutex = std.Io.Mutex;
 const posix = std.posix;
@@ -12,6 +13,8 @@ const pci = @import("../../device/pci/root.zig");
 const PciBus = pci.PciBus;
 const PciBridge = pci.PciBus;
 const PciAddress = pci.PciAddress;
+const PciDevice = @import("../../device/pci/root.zig").PciDevice;
+
 const log = std.log.scoped(.io_bus);
 
 const Self = @This();
@@ -32,7 +35,7 @@ com_mutex: [MAX_COMS]Mutex = @splat(Mutex.init),
 com: [MAX_COMS]?device.uart_16550.Uart = @splat(null),
 orig_tcattr: [MAX_COMS]?posix.termios = @splat(null),
 
-pci_bus: PciBus = PciBus.new(pci.PciBridge.new()),
+pci_bus: ?PciBus = null,
 cmos: device.cmos.Cmos = .{},
 address_port: AddressPort = std.mem.zeroes(AddressPort),
 
@@ -57,6 +60,12 @@ fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
 
     std.debug.assert(self.orig_tcattr[idx] == null);
     self.orig_tcattr[idx] = original;
+}
+
+pub fn attach_pci_device(self: *Self, pci_dev: PciDevice, id: usize) !void {
+    std.debug.assert(self.pci_bus != null);
+
+    try self.pci_bus.?.attach(pci_dev, id);
 }
 
 pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
@@ -84,6 +93,15 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
     if (console.configure_terminal) {
         try self.setup_terminal(console.output.handle, index);
     }
+}
+
+pub fn new(config: *const VmConfig) Self {
+    var self = Self{};
+
+    if (config.pci)
+        self.pci_bus = PciBus.new(pci.PciBridge.new());
+
+    return self;
 }
 
 pub fn deinit(self: *Self) void {
@@ -155,6 +173,12 @@ fn handle_com(
     }
 }
 
+fn pci_unsupported(data_ptr: [*]u8, io_request: anytype) void {
+    for (0..io_request.size) |i| {
+        data_ptr[i] = 0xff;
+    }
+}
+
 pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
     const data_len =
@@ -222,16 +246,30 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
         0x87 => {
             return false;
         },
+
+        // PCI regs
         0xcf8 => {
-            if (io_request.size != 4) {
-                return error.InvalidWrite;
+            if (self.pci_bus == null) {
+                pci_unsupported(data_ptr, io_request);
+            } else {
+                if (io_request.size != 4) {
+                    return error.InvalidWrite;
+                }
+
+                if (io_request.dir == .Out) {
+                    self.address_port = @bitCast(std.mem.readInt(u32, data_ptr[0..4], .little));
+                } else {
+                    std.mem.writeInt(u32, data_ptr[0..4], @bitCast(self.address_port), .little);
+                }
             }
 
-            if (io_request.dir == .Out) {
-                self.address_port = @bitCast(std.mem.readInt(u32, data_ptr[0..4], .little));
-            } else {
-                std.mem.writeInt(u32, data_ptr[0..4], @bitCast(self.address_port), .little);
-            }
+            return false;
+        },
+
+        // This must not happen, since in case of PCI support, linux must stick to 1st method.
+        0xcfa => {
+            std.debug.assert(self.pci_bus == null);
+            pci_unsupported(data_ptr, io_request);
 
             return false;
         },
@@ -263,24 +301,37 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
         // I don't want to move this shit into PCI level, so PCI always returns u32 and then io_bus
         // returns needed part of the byte
         0xcfc...0xcff => {
-            const data_start: u8 = @intCast(io_request.port - 0xcfc);
-            const data_end: u8 = data_start + io_request.size;
+            if (self.pci_bus) |*pci_bus| {
+                const data_start: u8 = @intCast(io_request.port - 0xcfc);
+                const data_end: u8 = data_start + io_request.size;
 
-            if (data_start + io_request.size > 4)
-                return error.InvalidWrite;
+                if (data_start + io_request.size > 4)
+                    return error.InvalidWrite;
 
-            if (io_request.dir == .In) {
-                const register = self.address_port.register;
-                const reg_data = if (self.pci_bus.device(self.address_port.device)) |dev|
-                    try dev.read_config(register << 2)
-                else
-                    0xFFFFFFFF;
+                if (io_request.dir == .In) {
+                    const register = self.address_port.register;
+                    const config_offset: u8 = @as(u8, register) << 2;
+                    const reg_data = if (pci_bus.device(self.address_port.device)) |dev|
+                        try dev.read_config(config_offset)
+                    else
+                        0xFFFFFFFF;
 
-                for (data_start..data_end, 0..) |byte, i| {
-                    const shift: u5 = @intCast(byte * 8);
-                    data_ptr[i] = @truncate(reg_data >> shift);
+                    for (data_start..data_end, 0..) |byte, i| {
+                        const shift: u5 = @intCast(byte * 8);
+                        data_ptr[i] = @truncate(reg_data >> shift);
+                    }
+                } else {
+                    const register = self.address_port.register;
+                    const config_offset: u8 = (@as(u8, register) << 2) + data_start;
+
+                    if (pci_bus.device(self.address_port.device)) |dev| {
+                        try dev.write_config(config_offset, data);
+                    }
                 }
-            } else {}
+            } else {
+                pci_unsupported(data_ptr, io_request);
+            }
+
             return false;
         },
         else => {

@@ -4,15 +4,15 @@ const std = @import("std");
 const device = @import("../../device/root.zig");
 const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
-const VirtioDevice = @import("../../device/root.zig").VirtioDevice;
+const VirtioMmioDevice = @import("../../device/root.zig").VirtioMmioDevice;
 const log = std.log.scoped(.mmio_bus);
 const Vm = @import("../../root.zig").Vm;
 
 pub const MAX_DEVICES = 10;
 const Self = @This();
 
-buffer: [MAX_DEVICES]VirtioDevice,
-virtio_devs: std.ArrayList(VirtioDevice),
+buffer: [MAX_DEVICES]VirtioMmioDevice,
+virtio_devs: std.ArrayList(VirtioMmioDevice),
 
 pub fn handle_event(
     self: *Self,
@@ -66,11 +66,11 @@ pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
 pub fn new(alloc: std.mem.Allocator) !*Self {
     var self = try alloc.create(Self);
 
-    self.virtio_devs = std.ArrayList(VirtioDevice).initBuffer(&self.buffer);
+    self.virtio_devs = std.ArrayList(VirtioMmioDevice).initBuffer(&self.buffer);
     return self;
 }
 
-pub fn register_device(self: *Self, vm: *Vm, dev: VirtioDevice) !void {
+pub fn register_device(self: *Self, vm: *Vm, dev: VirtioMmioDevice) !void {
     const id = self.virtio_devs.items.len;
 
     try dev.register_events(vm, @truncate(id));

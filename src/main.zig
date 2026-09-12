@@ -33,6 +33,7 @@ var config = struct {
     block_device: []const u8 = "",
     cmdline: []const u8 = "",
     smp: []const u8 = "",
+    enable_pci: bool = false,
     log_level: []const u8 = @tagName(std.log.Level.info),
     io: ?std.Io = null,
     allocator: ?std.mem.Allocator = null,
@@ -75,6 +76,10 @@ pub fn main(init: std.process.Init) !void {
                 .long_name = "smp",
                 .help = "number of vCPUs",
                 .value_ref = runner.mkRef(&config.smp),
+            }, .{
+                .long_name = "enable-pci",
+                .help = "Enable PCI support",
+                .value_ref = runner.mkRef(&config.enable_pci),
             }, .{
                 .long_name = "log-level",
                 .help = "Global log level: err, warn, info, debug (default: " ++ @tagName(std.log.default_level) ++ ")",
@@ -149,6 +154,7 @@ fn run() !void {
         .block_device = config.block_device,
         .cmdline = config.cmdline,
         .smp = smp,
+        .pci = config.enable_pci,
     }, io, allocator);
     defer vm.deinit(allocator, io);
 

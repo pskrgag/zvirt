@@ -50,7 +50,10 @@ pub const Block = struct {
     requests: [MAX_IN_FLIGHT_REQUESTS]Token = undefined,
     bitmap: IdAllocator(MAX_IN_FLIGHT_REQUESTS) = .{},
 
-    pub const TYPE = 0x2;
+    pub const MMIO_TYPE = 0x2;
+
+    pub const PCI_CLASS = 0x1001;
+    pub const PCI_SUBCLASS = 0x0;
 
     const Self = @This();
 
@@ -213,7 +216,7 @@ pub const Block = struct {
         }
     }
 
-    pub fn read_config(self: *Self, offset: u32) u32 {
+    pub fn read_config(self: *const Self, offset: u32) u32 {
         return std.mem.readInt(u32, std.mem.asBytes(&self.config)[offset..][0..4], .little);
     }
 };
