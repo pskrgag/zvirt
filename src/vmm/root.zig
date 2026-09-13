@@ -4,7 +4,6 @@ const utils = @import("utils");
 const std = @import("std");
 const kvm = @import("kvm");
 const posix = std.posix;
-const builtin = @import("builtin");
 const lazy = utils.Lazy.lazy;
 const test_utils = @import("test_utils");
 const image = @import("image/root.zig");
@@ -18,10 +17,7 @@ pub const IoResult = kvm.IoResult;
 const memory = @import("memory.zig");
 const log = std.log.scoped(.vmm);
 
-pub const arch = switch (builtin.cpu.arch) {
-    .x86, .x86_64 => @import("arch/x86/vm.zig"),
-    else => @compileError("unsupported architecture"),
-};
+pub const arch = @import("arch/root.zig");
 
 const MAX_VCPUS = 16;
 var kvm_system = lazy(kvm.Kvm, kvm.Kvm.init);
@@ -117,7 +113,7 @@ pub const Vm = struct {
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
 
-        var archvm = try arch.ArchVm.new(&config,allocator);
+        var archvm = try arch.ArchVm.new(&config, allocator);
         errdefer archvm.deinit(allocator, io);
 
         try archvm.setup_vm(&vm, mem, &config, allocator);

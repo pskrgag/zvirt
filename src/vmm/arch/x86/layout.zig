@@ -42,11 +42,18 @@ pub fn virtio_device(config: *const VmConfig, idx: u64) u64 {
 //
 // This memory may be used for AP cpu bootstrap, which has a limit of 1MiB
 // TODO: figure out why
-pub fn memory_layout(config: *const VmConfig) [4]MemorySlot {
-    return [4]MemorySlot{
+pub fn memory_layout(config: *const VmConfig) [5]MemorySlot {
+    return [_]MemorySlot{
         MemorySlot{ .start = LOW_RAM_BEGIN, .length = 0x9e000, .kind = .Ram },
         MemorySlot{ .start = BOOT_ACPI_ADDR, .length = 0x2000, .kind = .Acpi },
         MemorySlot{ .start = 0x000A0000, .length = 0x00060000, .kind = .Reserved },
         MemorySlot{ .start = HIGH_RAM_BEGIN, .length = config.ram_size, .kind = .Ram },
+        MemorySlot{ .start = HIGH_RAM_BEGIN + config.ram_size, .length = 0x5000, .kind = .Reserved },
     };
+}
+
+pub fn pci_range(config: *const VmConfig) MemorySlot {
+    const layout = memory_layout(config);
+
+    return layout[layout.len - 1];
 }

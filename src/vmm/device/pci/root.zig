@@ -3,8 +3,12 @@
 const std = @import("std");
 const log = std.log.scoped(.pci);
 const VirtioPciDevice = @import("../virtio/pci.zig").VirtioPciDevice;
-pub const PciBridge = @import("bridge.zig").PciBridge;
+const arch = @import("../../arch/root.zig");
+const VmConfig = @import("../../root.zig").VmConfig;
+pub const Bar = @import("bar.zig").Bar;
+pub const BarAllocator = @import("bar.zig").BarAllocator;
 
+pub const PciBridge = @import("bridge.zig").PciBridge;
 const MAX_DEVICES = 32;
 
 pub const PciAddress = struct {
@@ -27,28 +31,39 @@ pub const PciDevice = union(enum) {
 
     pub fn write_config(self: *Self, offset: u8, data: []const u8) !void {
         return switch (self.*) {
-            inline else => |*device| try device.get_config().write_slice(offset, data),
+            inline else => |*device| try device.write_config(offset, data),
+        };
+    }
+
+    pub fn allocate_bars(self: *Self, alloc: *BarAllocator) !void {
+        return switch (self.*) {
+            inline else => |*device| try device.allocate_bars(alloc),
         };
     }
 };
 
 pub const PciBus = struct {
     devices: [MAX_DEVICES]?PciDevice,
+    allocator: BarAllocator,
 
     const Self = @This();
 
-    pub fn new(bridge: PciBridge) Self {
+    pub fn new(bridge: PciBridge, config: *const VmConfig) Self {
         var devs: [MAX_DEVICES]?PciDevice = @splat(null);
+        const pci_range = arch.layout.pci_range(config);
+        const allocator = BarAllocator.new(pci_range.start, pci_range.length);
 
         devs[0] = PciDevice{ .Brigde = bridge };
-        return .{ .devices = devs };
+        return .{ .devices = devs, .allocator = allocator };
     }
 
     // Thread unsafe (yet?)
-    pub fn attach(self: *Self, dev: PciDevice, id: usize) !void {
+    pub fn attach(self: *Self, _dev: PciDevice, id: usize) !void {
+        var dev = _dev;
         if (self.devices[id] != null)
             return error.DeviceAlreadyExists;
 
+        try dev.allocate_bars(&self.allocator);
         self.devices[id] = dev;
     }
 

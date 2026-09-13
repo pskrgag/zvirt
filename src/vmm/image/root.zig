@@ -1,12 +1,8 @@
 //! Image parsing
 
 const std = @import("std");
-const builtin = @import("builtin");
 const bzimage = @import("bzimage.zig");
-const arch = switch (builtin.cpu.arch) {
-    .x86, .x86_64 => @import("../arch/x86/vm.zig"),
-    else => @compileError("unsupported architecture"),
-};
+const arch = @import("../arch/root.zig");
 const GuestMemory = @import("../memory.zig").GuestMemory;
 const VmConfig = @import("../root.zig").VmConfig;
 

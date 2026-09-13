@@ -4,7 +4,6 @@ const GuestMemory = @import("../../memory.zig").GuestMemory;
 const Vm = @import("../../root.zig").Vm;
 const acpi = @import("../../acpi/root.zig");
 const std = @import("std");
-const builtin = @import("builtin");
 const layout = @import("layout.zig");
 
 pub fn setup_tables(vm: *Vm) !void {

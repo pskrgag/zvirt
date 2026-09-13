@@ -1,6 +1,7 @@
 //! PCI config space
 
 const std = @import("std");
+const Bar = @import("bar.zig").Bar;
 
 const TYPE0_VENDOR_OFFSET = 0x0;
 const TYPE0_DEVICE_OFFSET = 0x2;
@@ -12,6 +13,26 @@ const TYPE0_CAP_POINTER_OFFSET = 0x34;
 pub const PCI_STATUS_CAP_LIST = 0x10;
 
 const TYPE0_HEADER_SIZE = 64;
+
+fn bar_offset(idx: u8) usize {
+    std.debug.assert(idx <= 5);
+    return 0x10 + idx * 4;
+}
+
+pub const Command = packed struct(u16) {
+    io_space: u1,
+    memory_space: u1,
+    bus_master: u1,
+    special_cycles: u1,
+    memory_invalidate: u1,
+    vga_palette: u1,
+    parity_error: u1,
+    _reserved: u1,
+    serr: u1,
+    fast_btb: u1,
+    irq_disable: u1,
+    _reserved1: u5,
+};
 
 pub const PciClass = enum(u8) {
     Brigde = 0x6,
@@ -71,6 +92,14 @@ pub const PciConfigSpace = struct {
         if (T != u8 and T != u16 and T != u32) {
             @compileError("PCI config accesses must use u8, u16, or u32");
         }
+    }
+
+    pub fn set_bar(self: *Self, bar_idx: u8, raw: u32) !void {
+        if (bar_idx > 5)
+            return error.InvalidBar;
+
+        std.debug.print("set bar {x}\n", .{raw});
+        self.write(u32, bar_offset(bar_idx), raw) catch @panic("");
     }
 
     fn validate_size(offset: usize, size: usize) Error!void {

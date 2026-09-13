@@ -5,11 +5,7 @@ pub const c = @cImport({
 });
 
 const VmConfig = @import("../root.zig").VmConfig;
-const builtin = @import("builtin");
-const arch = switch (builtin.cpu.arch) {
-    .x86, .x86_64 => @import("../arch/x86/vm.zig"),
-    else => @compileError("unsupported architecture"),
-};
+const arch = @import("../arch/root.zig");
 const std = @import("std");
 const Image = @import("root.zig").Image;
 const GuestMemory = @import("../memory.zig").GuestMemory;

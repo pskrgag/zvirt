@@ -99,7 +99,7 @@ pub fn new(config: *const VmConfig) Self {
     var self = Self{};
 
     if (config.pci)
-        self.pci_bus = PciBus.new(pci.PciBridge.new());
+        self.pci_bus = PciBus.new(pci.PciBridge.new(), config);
 
     return self;
 }
