@@ -2,6 +2,7 @@
 
 const PciConfigSpace = @import("config.zig").PciConfigSpace;
 const BarAllocator = @import("bar.zig").BarAllocator;
+const BarMmio = @import("root.zig").BarMmio;
 
 const ZVIRT_VENDOR_ID = 0x1234;
 const ZVIRT_BRIDGE_ID = 0x5678;
@@ -21,6 +22,11 @@ pub const PciBridge = struct {
 
     pub fn write_config(self: *Self, offset: u8, data: []const u8) !void {
         try self.config.write_slice(offset, data);
+    }
+
+    pub fn bar_mmio(self: *Self) ?BarMmio {
+        _ = self;
+        return null;
     }
 
     pub fn allocate_bars(self: *Self, alloc: *BarAllocator) !void {

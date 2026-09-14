@@ -11,6 +11,7 @@ const Vm = @import("../../root.zig").Vm;
 const Mutex = std.Io.Mutex;
 const utils = @import("utils");
 const EventFd = utils.EventFd.EventFd;
+const MmioDevice = @import("../root.zig").MmioDevice;
 
 pub const MmioRegister = enum(u64) {
     Magic = 0x0,
@@ -342,6 +343,56 @@ pub const VirtioMmioDevice = union(enum) {
                     irq_num,
                 ),
             },
+        };
+    }
+
+    fn validate_mmio_access(offset: usize, size: usize) !void {
+        // All registers in generic space are u32. Device config space can be accessed in any way.
+        if (offset < 0x100 and size != @sizeOf(u32))
+            return error.InvalidMmioAccessSize;
+
+        if (!std.math.isPowerOfTwo(size))
+            return error.InvalidMmioAccessSize;
+
+        // Tho it's supported, but it's not atomic. Let's disable for now and see if linux will
+        // complain.
+        if (size >= @sizeOf(u64))
+            return error.InvalidMmioAccessSize;
+    }
+
+    fn mmio_read(context: *anyopaque, offset: usize, data: []u8, io: std.Io) !void {
+        try validate_mmio_access(offset, data.len);
+
+        const self: *Self = @ptrCast(@alignCast(context));
+        const value = try self.handle_read(@intCast(offset), io);
+
+        switch (data.len) {
+            @sizeOf(u8) => data[0] = @truncate(value),
+            @sizeOf(u16) => std.mem.writeInt(u16, data[0..@sizeOf(u16)], @truncate(value), .little),
+            @sizeOf(u32) => std.mem.writeInt(u32, data[0..@sizeOf(u32)], value, .little),
+            else => unreachable,
+        }
+    }
+
+    fn mmio_write(context: *anyopaque, offset: usize, data: []const u8, io: std.Io) !void {
+        try validate_mmio_access(offset, data.len);
+
+        const self: *Self = @ptrCast(@alignCast(context));
+        const value: u32 = switch (data.len) {
+            @sizeOf(u8) => data[0],
+            @sizeOf(u16) => std.mem.readInt(u16, data[0..@sizeOf(u16)], .little),
+            @sizeOf(u32) => std.mem.readInt(u32, data[0..@sizeOf(u32)], .little),
+            else => unreachable,
+        };
+
+        try self.handle_write(@intCast(offset), value, io);
+    }
+
+    pub fn mmio_device(self: *Self) MmioDevice {
+        return MmioDevice{
+            .context = self,
+            .read_fn = mmio_read,
+            .write_fn = mmio_write,
         };
     }
 

@@ -7,6 +7,7 @@ const arch = @import("../../arch/root.zig");
 const VmConfig = @import("../../root.zig").VmConfig;
 pub const Bar = @import("bar.zig").Bar;
 pub const BarAllocator = @import("bar.zig").BarAllocator;
+const MmioDevice = @import("../root.zig").MmioDevice;
 
 pub const PciBridge = @import("bridge.zig").PciBridge;
 const MAX_DEVICES = 32;
@@ -15,6 +16,12 @@ pub const PciAddress = struct {
     bus: u8,
     function: u3,
     device: u5,
+};
+
+pub const BarMmio = struct {
+    base: u64,
+    size: usize,
+    dev: MmioDevice,
 };
 
 pub const PciDevice = union(enum) {
@@ -40,6 +47,12 @@ pub const PciDevice = union(enum) {
             inline else => |*device| try device.allocate_bars(alloc),
         };
     }
+
+    pub fn bar_mmio(self: *Self) ?BarMmio {
+        return switch (self.*) {
+            inline else => |*device| device.bar_mmio(),
+        };
+    }
 };
 
 pub const PciBus = struct {
@@ -58,13 +71,14 @@ pub const PciBus = struct {
     }
 
     // Thread unsafe (yet?)
-    pub fn attach(self: *Self, _dev: PciDevice, id: usize) !void {
+    pub fn attach(self: *Self, _dev: PciDevice, id: usize) !*PciDevice {
         var dev = _dev;
         if (self.devices[id] != null)
             return error.DeviceAlreadyExists;
 
         try dev.allocate_bars(&self.allocator);
         self.devices[id] = dev;
+        return &(self.devices[id].?);
     }
 
     pub fn device(self: *Self, id: u32) ?*PciDevice {

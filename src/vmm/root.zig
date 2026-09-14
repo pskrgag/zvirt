@@ -268,7 +268,12 @@ pub const Vm = struct {
         while (true) {
             var event_buffer: [1]EpollEvent = undefined;
 
-            const events = try self.epoll.pwait(&event_buffer, -1, linux.sigfillset());
+            const events = self.epoll.pwait(&event_buffer, -1, linux.sigfillset()) catch |e| {
+                if (e == error.Interrupted)
+                    continue;
+
+                return e;
+            };
             for (events) |event| {
                 const token: EventToken = @bitCast(event.data);
 

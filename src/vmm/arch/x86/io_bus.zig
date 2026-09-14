@@ -62,10 +62,10 @@ fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
     self.orig_tcattr[idx] = original;
 }
 
-pub fn attach_pci_device(self: *Self, pci_dev: PciDevice, id: usize) !void {
+pub fn attach_pci_device(self: *Self, pci_dev: PciDevice, id: usize) !*PciDevice {
     std.debug.assert(self.pci_bus != null);
 
-    try self.pci_bus.?.attach(pci_dev, id);
+    return try self.pci_bus.?.attach(pci_dev, id);
 }
 
 pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
@@ -318,6 +318,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
 
                     for (data_start..data_end, 0..) |byte, i| {
                         const shift: u5 = @intCast(byte * 8);
+
                         data_ptr[i] = @truncate(reg_data >> shift);
                     }
                 } else {

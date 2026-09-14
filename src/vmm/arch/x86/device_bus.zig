@@ -95,7 +95,10 @@ pub fn setup_devices(
             );
             errdefer dev.deinit(io);
 
-            try self.io_bus.attach_pci_device(PciDevice{ .Virtio = dev }, 1);
+            const pci_dev = try self.io_bus.attach_pci_device(PciDevice{ .Virtio = dev }, 1);
+
+            if (pci_dev.bar_mmio()) |bar|
+                try self.mmio_bus.register_range(bar.base, bar.size, bar.dev);
         }
     }
 }

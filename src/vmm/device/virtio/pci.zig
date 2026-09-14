@@ -13,6 +13,9 @@ const Vm = @import("../../root.zig").Vm;
 pub const c = @cImport({
     @cInclude("linux/virtio_pci.h");
 });
+const BarMmio = @import("../pci/root.zig").BarMmio;
+
+const log = std.log.scoped(.virtio_pci);
 
 const VENDOR_ID = 0x1AF4;
 
@@ -83,6 +86,20 @@ fn VirtioPci(comptime Device: type) type {
                 .irq = irq,
             };
         }
+
+        fn mmio_read(self: *Self, offset: usize, data: []u8, io: std.Io) !void {
+            _ = self;
+            _ = io;
+            log.debug("read from 0x{x}, data {x}\n", .{ offset, data });
+            @panic("todo");
+        }
+
+        fn mmio_write(self: *Self, offset: usize, data: []const u8, io: std.Io) !void {
+            _ = self;
+            _ = io;
+            log.debug("write to 0x{x}, data {x}\n", .{ offset, data });
+            @panic("todo");
+        }
     };
 }
 
@@ -148,6 +165,46 @@ pub const VirtioPciDevice = union(enum) {
                     bar.* = try alloc.allocate(4096);
                     try device.config.set_bar(@truncate(i), bar.*.?.value());
                 }
+            },
+        };
+    }
+
+    fn mmio_read(context: *anyopaque, offset: usize, data: []u8, io: std.Io) !void {
+        const self: *Self = @ptrCast(@alignCast(context));
+
+        return switch (self.*) {
+            inline else => |*device| {
+                try device.mmio_read(offset, data, io);
+            },
+        };
+    }
+
+    fn mmio_write(context: *anyopaque, offset: usize, data: []const u8, io: std.Io) !void {
+        const self: *Self = @ptrCast(@alignCast(context));
+
+        return switch (self.*) {
+            inline else => |*device| {
+                try device.mmio_write(offset, data, io);
+            },
+        };
+    }
+
+    pub fn bar_mmio(self: *Self) ?BarMmio {
+        return switch (self.*) {
+            inline else => |*device| {
+                if (device.bars[0]) |bar| {
+                    return .{
+                        .base = bar.base,
+                        .size = bar.size,
+                        .dev = .{
+                            .context = self,
+                            .read_fn = mmio_read,
+                            .write_fn = mmio_write,
+                        },
+                    };
+                }
+
+                return null;
             },
         };
     }

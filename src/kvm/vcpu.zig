@@ -39,6 +39,7 @@ pub const ExitReason = union(ExitReasonRaw) {
         pa: u64,
         data: u64,
         write: bool,
+        len: usize,
     },
     Shutdown: void,
     Interrupted: void,
@@ -136,6 +137,7 @@ pub const Vcpu = struct {
                 .data = @bitCast(self.run.unnamed_0.mmio.data),
                 .write = self.run.unnamed_0.mmio.is_write == 1,
                 .pa = self.run.unnamed_0.mmio.phys_addr,
+                .len = self.run.unnamed_0.mmio.len,
             } },
             .Interrupted => .Interrupted,
         };
