@@ -24,9 +24,15 @@ pub const PciBridge = struct {
         try self.config.write_slice(offset, data);
     }
 
-    pub fn bar_mmio(self: *Self) ?BarMmio {
+    pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
         _ = self;
+        _ = idx;
         return null;
+    }
+
+    pub fn num_bars(self: *const Self) usize {
+        _ = self;
+        return 0;
     }
 
     pub fn allocate_bars(self: *Self, alloc: *BarAllocator) !void {

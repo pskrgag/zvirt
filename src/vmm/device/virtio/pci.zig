@@ -24,7 +24,7 @@ fn VirtioPci(comptime Device: type) type {
         config: PciConfigSpace,
         device: VirtioCore(Device),
         irq: u32,
-        bars: [1]?Bar = @splat(null),
+        bars: [4]?Bar = @splat(null),
 
         const Self = @This();
 
@@ -189,10 +189,19 @@ pub const VirtioPciDevice = union(enum) {
         };
     }
 
-    pub fn bar_mmio(self: *Self) ?BarMmio {
+    pub fn num_bars(self: *const Self) usize {
+        return switch (self.*) {
+            inline else => |*device| device.bars.len,
+        };
+    }
+
+    pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
         return switch (self.*) {
             inline else => |*device| {
-                if (device.bars[0]) |bar| {
+                if (idx >= device.bars.len)
+                    return null;
+
+                if (device.bars[idx]) |bar| {
                     return .{
                         .base = bar.base,
                         .size = bar.size,

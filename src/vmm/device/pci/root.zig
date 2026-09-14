@@ -48,9 +48,15 @@ pub const PciDevice = union(enum) {
         };
     }
 
-    pub fn bar_mmio(self: *Self) ?BarMmio {
+    pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
         return switch (self.*) {
-            inline else => |*device| device.bar_mmio(),
+            inline else => |*device| device.bar_mmio(idx),
+        };
+    }
+
+    pub fn num_bars(self: *const Self) usize {
+        return switch (self.*) {
+            inline else => |*device| device.num_bars(),
         };
     }
 };
