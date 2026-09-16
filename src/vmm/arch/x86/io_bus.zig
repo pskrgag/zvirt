@@ -35,7 +35,7 @@ com_mutex: [MAX_COMS]Mutex = @splat(Mutex.init),
 com: [MAX_COMS]?device.uart_16550.Uart = @splat(null),
 orig_tcattr: [MAX_COMS]?posix.termios = @splat(null),
 
-pci_bus: ?PciBus = null,
+pci_bus_obj: ?PciBus = null,
 cmos: device.cmos.Cmos = .{},
 address_port: AddressPort = std.mem.zeroes(AddressPort),
 
@@ -62,10 +62,18 @@ fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
     self.orig_tcattr[idx] = original;
 }
 
-pub fn attach_pci_device(self: *Self, pci_dev: PciDevice, id: usize) !*PciDevice {
-    std.debug.assert(self.pci_bus != null);
+pub fn pci_bus(self: *Self) ?*PciBus {
+    if (self.pci_bus_obj) |*obj| {
+        return obj;
+    } else {
+        return null;
+    }
+}
 
-    return try self.pci_bus.?.attach(pci_dev, id);
+pub fn attach_pci_device(self: *Self, pci_dev: PciDevice, id: usize) !*PciDevice {
+    std.debug.assert(self.pci_bus_obj != null);
+
+    return try self.pci_bus_obj.?.attach(pci_dev, id);
 }
 
 pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
@@ -99,12 +107,14 @@ pub fn new(config: *const VmConfig) Self {
     var self = Self{};
 
     if (config.pci)
-        self.pci_bus = PciBus.new(pci.PciBridge.new(), config);
+        self.pci_bus_obj = PciBus.new(pci.PciBridge.new(), config);
 
     return self;
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Self, io: std.Io) void {
+    if (self.pci_bus_obj) |*bus| bus.deinit(io);
+
     // unwrap here, since if self.original exists, then com1 must also exist
     for (self.orig_tcattr, 0..) |orig, i| {
         if (orig) |o|
@@ -249,7 +259,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
 
         // PCI regs
         0xcf8 => {
-            if (self.pci_bus == null) {
+            if (self.pci_bus_obj == null) {
                 pci_unsupported(data_ptr, io_request);
             } else {
                 if (io_request.size != 4) {
@@ -268,7 +278,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
 
         // This must not happen, since in case of PCI support, linux must stick to 1st method.
         0xcfa => {
-            std.debug.assert(self.pci_bus == null);
+            std.debug.assert(self.pci_bus_obj == null);
             pci_unsupported(data_ptr, io_request);
 
             return false;
@@ -301,7 +311,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
         // I don't want to move this shit into PCI level, so PCI always returns u32 and then io_bus
         // returns needed part of the byte
         0xcfc...0xcff => {
-            if (self.pci_bus) |*pci_bus| {
+            if (self.pci_bus_obj) |*pci_bus_obj| {
                 const data_start: u8 = @intCast(io_request.port - 0xcfc);
                 const data_end: u8 = data_start + io_request.size;
 
@@ -311,7 +321,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                 if (io_request.dir == .In) {
                     const register = self.address_port.register;
                     const config_offset: u8 = @as(u8, register) << 2;
-                    const reg_data = if (pci_bus.device(self.address_port.device)) |dev|
+                    const reg_data = if (pci_bus_obj.device(self.address_port.device)) |dev|
                         try dev.read_config(config_offset)
                     else
                         0xFFFFFFFF;
@@ -325,7 +335,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                     const register = self.address_port.register;
                     const config_offset: u8 = (@as(u8, register) << 2) + data_start;
 
-                    if (pci_bus.device(self.address_port.device)) |dev| {
+                    if (pci_bus_obj.device(self.address_port.device)) |dev| {
                         try dev.write_config(config_offset, data);
                     }
                 }

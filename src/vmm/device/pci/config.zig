@@ -106,8 +106,8 @@ pub const PciConfigSpace = struct {
         if (offset > SIZE or size > SIZE - offset)
             return error.OutOfBounds;
 
-        if (offset % size != 0)
-            return error.UnalignedAccess;
+        // if (offset % size != 0)
+        //     return error.UnalignedAccess;
     }
 
     fn validate_access(comptime T: type, offset: usize) Error!void {

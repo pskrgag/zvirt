@@ -5,6 +5,7 @@ const queue = @import("queue.zig");
 const log = std.log.scoped(.virtio_blk);
 const FileEngine = @import("../../io/root.zig").FileEngine;
 const IdAllocator = @import("utils").IdAlloc.IdAllocator;
+const PciClass = @import("../pci/config.zig").PciClass;
 
 pub const c = @cImport({
     @cInclude("linux/virtio_blk.h");
@@ -52,8 +53,9 @@ pub const Block = struct {
 
     pub const MMIO_TYPE = 0x2;
 
-    pub const PCI_CLASS = 0x1001;
+    pub const PCI_DEVICE_ID = 0x1042;
     pub const PCI_SUBCLASS = 0x0;
+    pub const PCI_CLASS: PciClass = .Storage;
 
     const Self = @This();
 

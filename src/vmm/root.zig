@@ -114,7 +114,8 @@ pub const Vm = struct {
         errdefer mem.deinit(allocator);
 
         var archvm = try arch.ArchVm.new(&config, allocator);
-        errdefer archvm.deinit(allocator, io);
+        var archvm_cleanup = &archvm;
+        errdefer archvm_cleanup.deinit(allocator, io);
 
         try archvm.setup_vm(&vm, mem, &config, allocator);
         const img = try image.parse(config.binary, mem, &config);
@@ -136,6 +137,7 @@ pub const Vm = struct {
             .archvm = archvm,
         };
         errdefer self.epoll.deinit();
+        archvm_cleanup = &self.archvm;
 
         try self.archvm.setup_devices(&config, self, allocator, io);
         try self.create_vcpu(img.ep, 0, io, allocator);

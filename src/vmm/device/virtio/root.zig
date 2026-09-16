@@ -4,6 +4,8 @@ const std = @import("std");
 const Block = @import("block.zig").Block;
 const VirtQueue = @import("queue.zig").VirtQueue;
 const Vm = @import("../../root.zig").Vm;
+const Status = @import("common.zig").Status;
+const StatusBits = @import("common.zig").StatusBits;
 
 const log = std.log.scoped(.virtio);
 
@@ -15,19 +17,18 @@ pub const VirtioDeviceInit = union(VirtioDeviceType) {
     BlockDevice: []const u8,
 };
 
-pub const StatusBits = enum(u32) {
-    Ack = 1 << 0,
-    Driver = 1 << 1,
-    DriverOk = 1 << 2,
-    FeatureOk = 1 << 3,
-    DeviceNeedsReset = 1 << 6,
-    Failed = 1 << 7,
-};
-
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
-const Status = u32;
 
 pub const MAX_QUEUES_SUPPORTED = 1;
+
+fn set_low(value: *u64, low: u32) void {
+    value.* = (value.* & 0xffff_ffff_0000_0000) | @as(u64, low);
+}
+
+fn set_high(value: *u64, high: u32) void {
+    value.* = (value.* & 0x0000_0000_ffff_ffff) |
+        (@as(u64, high) << 32);
+}
 
 pub fn VirtioCore(comptime Device: type) type {
     return struct {
@@ -43,6 +44,18 @@ pub fn VirtioCore(comptime Device: type) type {
 
         pub fn new(device: Device, alloc: std.mem.Allocator) Self {
             return .{ .device = device, .alloc = std.heap.ArenaAllocator.init(alloc) };
+        }
+
+        pub fn update_driver_feats(self: *Self, bits: u32, high: bool) void {
+            if (high)
+                set_high(&self.driver_features, bits)
+            else
+                set_low(&self.driver_features, bits);
+
+            self.update_status(
+                .FeatureOk,
+                (self.driver_features & ~self.device_features) == 0,
+            );
         }
 
         pub fn update_status(self: *Self, bit: StatusBits, set: bool) void {

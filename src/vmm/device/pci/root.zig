@@ -8,6 +8,8 @@ const VmConfig = @import("../../root.zig").VmConfig;
 pub const Bar = @import("bar.zig").Bar;
 pub const BarAllocator = @import("bar.zig").BarAllocator;
 const MmioDevice = @import("../root.zig").MmioDevice;
+const PciConfigSpace = @import("config.zig").PciConfigSpace;
+const PciClass = @import("config.zig").PciClass;
 
 pub const PciBridge = @import("bridge.zig").PciBridge;
 const MAX_DEVICES = 32;
@@ -24,39 +26,122 @@ pub const BarMmio = struct {
     dev: MmioDevice,
 };
 
+pub const PciDeviceCore = struct {
+    config: PciConfigSpace,
+    bars: [6]?Bar = @splat(null),
+    active_bars: u8 = 0,
+
+    const Self = @This();
+
+    pub fn new_device(vendor_id: u16, device_id: u16, class: PciClass, subclass: u8, bus: *PciBus) Self {
+        const config = PciConfigSpace.new_type0(
+            vendor_id,
+            device_id,
+            class,
+            subclass,
+        );
+
+        _ = bus;
+        return .{ .config = config };
+    }
+
+    pub fn new_bridge(vendor_id: u16, device_id: u16, class: PciClass, subclass: u8) Self {
+        const config = PciConfigSpace.new_type0(
+            vendor_id,
+            device_id,
+            class,
+            subclass,
+        );
+
+        return .{ .config = config };
+    }
+
+    pub fn allocate_bar(self: *Self, bus: *PciBus, handler: MmioDevice) !u8 {
+        if (self.active_bars == self.bars.len)
+            return error.NoMoreBars;
+
+        const bar_idx = self.active_bars;
+        const bar = try bus.allocator.allocate(4096, handler);
+        try self.config.set_bar(@truncate(bar_idx), bar.value());
+
+        std.debug.assert(self.bars[bar_idx] == null);
+        self.bars[bar_idx] = bar;
+
+        self.active_bars += 1;
+        return bar_idx;
+    }
+
+    pub fn write_config(self: *Self, offset: u8, data: []const u8) !void {
+        // Handle BAR writes
+        if (offset >= 0x10 and offset < 0x28) {
+            std.debug.assert(offset % 4 == 0);
+            std.debug.assert(data.len == 4);
+
+            const bar = (offset - 0x10) / 4;
+
+            if (bar < self.bars.len) {
+                if (self.bars[bar]) |b| {
+                    if (std.mem.eql(u8, data[0..4], &.{ 0xff, 0xff, 0xff, 0xff })) {
+                        try self.config.set_bar(@truncate(bar), @truncate(~(b.size - 1)));
+                    } else {
+                        try self.config.set_bar(@truncate(bar), std.mem.readInt(u32, data[0..4], .little));
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        try self.config.write_slice(offset, data);
+    }
+
+    pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
+        if (self.bars[idx]) |bar| {
+            return .{
+                .base = bar.base,
+                .size = bar.size,
+                .dev = bar.handler,
+            };
+        } else {
+            return null;
+        }
+    }
+};
+
 pub const PciDevice = union(enum) {
     Brigde: PciBridge,
     Virtio: VirtioPciDevice,
 
     const Self = @This();
 
+    pub fn deinit(self: *Self, io: std.Io) void {
+        switch (self.*) {
+            .Brigde => {},
+            .Virtio => |*device| device.deinit(io),
+        }
+    }
+
     pub fn read_config(self: *Self, offset: u8) !u32 {
         return switch (self.*) {
-            inline else => |*device| device.get_config().read(u32, offset),
+            inline else => |*device| device.pci_core().config.read(u32, offset),
         };
     }
 
     pub fn write_config(self: *Self, offset: u8, data: []const u8) !void {
         return switch (self.*) {
-            inline else => |*device| try device.write_config(offset, data),
+            inline else => |*device| try device.pci_core().write_config(offset, data),
         };
     }
 
-    pub fn allocate_bars(self: *Self, alloc: *BarAllocator) !void {
+    pub fn num_bars(self: *Self) usize {
         return switch (self.*) {
-            inline else => |*device| try device.allocate_bars(alloc),
+            inline else => |*device| device.pci_core().active_bars,
         };
     }
 
     pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
         return switch (self.*) {
-            inline else => |*device| device.bar_mmio(idx),
-        };
-    }
-
-    pub fn num_bars(self: *const Self) usize {
-        return switch (self.*) {
-            inline else => |*device| device.num_bars(),
+            inline else => |*device| device.pci_core().bar_mmio(idx),
         };
     }
 };
@@ -76,13 +161,18 @@ pub const PciBus = struct {
         return .{ .devices = devs, .allocator = allocator };
     }
 
-    // Thread unsafe (yet?)
-    pub fn attach(self: *Self, _dev: PciDevice, id: usize) !*PciDevice {
-        var dev = _dev;
+    pub fn deinit(self: *Self, io: std.Io) void {
+        for (&self.devices) |*slot| {
+            if (slot.*) |*dev| dev.deinit(io);
+            slot.* = null;
+        }
+    }
+
+    // Takes ownership on success. Thread unsafe (yet?)
+    pub fn attach(self: *Self, dev: PciDevice, id: usize) !*PciDevice {
         if (self.devices[id] != null)
             return error.DeviceAlreadyExists;
 
-        try dev.allocate_bars(&self.allocator);
         self.devices[id] = dev;
         return &(self.devices[id].?);
     }

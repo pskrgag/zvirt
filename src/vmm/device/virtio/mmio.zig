@@ -218,7 +218,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .InterruptStatus,
                     => {},
 
-                    .Status => self.device.status = data,
+                    .Status => self.device.status = @truncate(data),
                     .InterruptAck => {
                         self.irq_state &= ~data;
                     },
@@ -233,17 +233,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .QueueUsedLow => self.set_queue_used_low(data),
                     .QueueUsedHigh => self.set_queue_used_high(data),
                     .QueueNotify => try self.notify_queue(data, io),
-                    .DriverFeatures => {
-                        if (self.driver_sel)
-                            set_high(&self.device.driver_features, data)
-                        else
-                            set_low(&self.device.driver_features, data);
-
-                        self.device.update_status(
-                            .FeatureOk,
-                            (self.device.driver_features & ~self.device.device_features) == 0,
-                        );
-                    },
+                    .DriverFeatures => self.device.update_driver_feats(data, self.driver_sel),
                     .QueueSel => self.queue_sel = data,
                 }
             } else if (reg_raw >= 0x100) {

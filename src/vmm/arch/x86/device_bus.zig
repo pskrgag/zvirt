@@ -26,7 +26,7 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
     self.mmio_bus.deinit(alloc, io);
-    self.io_bus.deinit();
+    self.io_bus.deinit(io);
 }
 
 pub fn handle_event(
@@ -86,16 +86,15 @@ pub fn setup_devices(
             try self.mmio_bus.register_device(vm, dev);
         } else {
             var dev = try VirtioPciDevice.new(
-                base,
                 .{ .BlockDevice = config.block_device },
-                vm,
-                @truncate(irq),
+                self.io_bus.pci_bus().?,
                 alloc,
                 io,
             );
-            errdefer dev.deinit(io);
-
-            const pci_dev = try self.io_bus.attach_pci_device(PciDevice{ .Virtio = dev }, 1);
+            const pci_dev = self.io_bus.attach_pci_device(PciDevice{ .Virtio = dev }, 1) catch |err| {
+                dev.deinit(io);
+                return err;
+            };
             const bars = pci_dev.num_bars();
 
             for (0..bars) |i| {

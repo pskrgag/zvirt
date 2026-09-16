@@ -14,6 +14,8 @@ pub const c = @cImport({
     @cInclude("linux/virtio_pci.h");
 });
 const BarMmio = @import("../pci/root.zig").BarMmio;
+const PciDeviceCore = @import("../pci/root.zig").PciDeviceCore;
+const PciBus = @import("../pci/root.zig").PciBus;
 
 const log = std.log.scoped(.virtio_pci);
 
@@ -21,31 +23,39 @@ const VENDOR_ID = 0x1AF4;
 
 fn VirtioPci(comptime Device: type) type {
     return struct {
-        config: PciConfigSpace,
         device: VirtioCore(Device),
-        irq: u32,
-        bars: [4]?Bar = @splat(null),
+        pci: PciDeviceCore,
+        allocator: std.mem.Allocator,
+        device_sel: u1 = 0,
+        driver_sel: u1 = 0,
 
         const Self = @This();
 
-        pub fn new(base: u64, device: VirtioCore(Device), vm: *Vm, irq: u32) !Self {
-            _ = vm;
-            _ = base;
+        pub fn new(device: VirtioCore(Device), bus: *PciBus, alloc: std.mem.Allocator) !*Self {
+            const self = try alloc.create(Self);
+            errdefer alloc.destroy(self);
 
-            var config = PciConfigSpace.new_type0(
+            var pci = PciDeviceCore.new_device(
                 VENDOR_ID,
+                Device.PCI_DEVICE_ID,
                 Device.PCI_CLASS,
-                .Storage,
                 Device.PCI_SUBCLASS,
+                bus,
             );
+
+            const bar: u8 = try pci.allocate_bar(bus, .{
+                .context = self,
+                .read_fn = mmio_read,
+                .write_fn = mmio_write,
+            });
 
             // Generic cap
             const gen_cap = c.virtio_pci_cap{
                 .cap_vndr = 0x09,
                 .cap_next = 0,
-                .cap_len = 16,
+                .cap_len = @sizeOf(c.virtio_pci_cap),
                 .cfg_type = c.VIRTIO_PCI_CAP_COMMON_CFG,
-                .bar = 0,
+                .bar = bar,
                 .id = 0,
                 .padding = @splat(0),
                 .offset = 0,
@@ -55,177 +65,158 @@ fn VirtioPci(comptime Device: type) type {
             const isr_cap = c.virtio_pci_cap{
                 .cap_vndr = 0x09,
                 .cap_next = 0,
-                .cap_len = 16,
+                .cap_len = @sizeOf(c.virtio_pci_cap),
                 .cfg_type = c.VIRTIO_PCI_CAP_ISR_CFG,
-                .bar = 0,
+                .bar = bar,
                 .id = 0,
                 .padding = @splat(0),
-                .offset = gen_cap.offset + gen_cap.length,
-                .length = 8,
+                .offset = 128,
+                .length = 2,
             };
 
-            const notify_cap = c.virtio_pci_cap{
-                .cap_vndr = 0x09,
-                .cap_next = 0,
-                .cap_len = 16,
-                .cfg_type = c.VIRTIO_PCI_CAP_NOTIFY_CFG,
-                .bar = 0,
-                .id = 0,
-                .padding = @splat(0),
-                .offset = isr_cap.offset + isr_cap.length,
-                .length = @sizeOf(c.virtio_pci_notify_cap),
+            const notify_cap = c.virtio_pci_notify_cap{
+                .cap = .{
+                    .cap_vndr = 0x09,
+                    .cap_next = 0,
+                    .cap_len = @sizeOf(c.virtio_pci_notify_cap),
+                    .cfg_type = c.VIRTIO_PCI_CAP_NOTIFY_CFG,
+                    .bar = bar,
+                    .id = 0,
+                    .padding = @splat(0),
+                    .offset = 256,
+                    .length = 4,
+                },
+                .notify_off_multiplier = 0,
             };
 
-            try config.add_capability(std.mem.asBytes(&gen_cap));
-            try config.add_capability(std.mem.asBytes(&isr_cap));
-            try config.add_capability(std.mem.asBytes(&notify_cap));
+            const device_conifg = c.virtio_pci_notify_cap{
+                .cap = .{
+                    .cap_vndr = 0x09,
+                    .cap_next = 0,
+                    .cap_len = @sizeOf(c.virtio_pci_notify_cap),
+                    .cfg_type = c.VIRTIO_PCI_CAP_DEVICE_CFG,
+                    .bar = bar,
+                    .id = 0,
+                    .padding = @splat(0),
+                    .offset = 384,
+                    .length = @sizeOf(@TypeOf(device.device.config)),
+                },
+                .notify_off_multiplier = 0,
+            };
 
-            return .{
-                .config = config,
+            try pci.config.add_capability(std.mem.asBytes(&gen_cap));
+            try pci.config.add_capability(std.mem.asBytes(&isr_cap));
+            try pci.config.add_capability(std.mem.asBytes(&notify_cap));
+            try pci.config.add_capability(std.mem.asBytes(&device_conifg));
+
+            self.* = .{
                 .device = device,
-                .irq = irq,
+                .pci = pci,
+                .allocator = alloc,
+            };
+
+            return self;
+        }
+
+        pub fn deinit(self: *Self, io: std.Io) void {
+            const allocator = self.allocator;
+            self.device.deinit(io);
+            allocator.destroy(self);
+        }
+
+        fn handle_generic_cap_write(self: *Self, offset: usize, data: []const u8) !void {
+            const value: u32 = switch (data.len) {
+                @sizeOf(u8) => data[0],
+                @sizeOf(u16) => std.mem.readInt(u16, data[0..@sizeOf(u16)], .little),
+                @sizeOf(u32) => std.mem.readInt(u32, data[0..@sizeOf(u32)], .little),
+                else => unreachable,
+            };
+
+            switch (offset) {
+                @offsetOf(c.virtio_pci_common_cfg, "device_status") => self.device.status = @truncate(value),
+                @offsetOf(c.virtio_pci_common_cfg, "device_feature_select") => self.device_sel = @truncate(value),
+                @offsetOf(c.virtio_pci_common_cfg, "guest_feature_select") => self.driver_sel = @truncate(value),
+                @offsetOf(c.virtio_pci_common_cfg, "guest_feature") => self.device.update_driver_feats(value, self.driver_sel != 0),
+                else => @panic("todo generic"),
+            }
+        }
+
+        fn handle_generic_cap_read(self: *Self, offset: usize) !u32 {
+            return switch (offset) {
+                @offsetOf(c.virtio_pci_common_cfg, "device_status") => self.device.status,
+                @offsetOf(c.virtio_pci_common_cfg, "device_feature") => if (self.device_sel != 0)
+                    @truncate(self.device.device_features >> 32)
+                else
+                    @truncate(self.device.device_features),
+                else => @panic("todo generic"),
             };
         }
 
-        fn mmio_read(self: *Self, offset: usize, data: []u8, io: std.Io) !void {
-            _ = self;
+        fn mmio_read(_self: *anyopaque, offset: usize, data: []u8, io: std.Io) !void {
             _ = io;
+
+            const self: *Self = @ptrCast(@alignCast(_self));
+
             log.debug("read from 0x{x}, data {x}\n", .{ offset, data });
-            @panic("todo");
+
+            const res = if (offset < 128)
+                try self.handle_generic_cap_read(offset)
+            else
+                self.device.device.read_config(@truncate(offset - 384));
+
+            switch (data.len) {
+                @sizeOf(u8) => data[0] = @truncate(res),
+                @sizeOf(u16) => std.mem.writeInt(u16, data[0..@sizeOf(u16)], @truncate(res), .little),
+                @sizeOf(u32) => std.mem.writeInt(u32, data[0..@sizeOf(u32)], res, .little),
+                else => unreachable,
+            }
         }
 
-        fn mmio_write(self: *Self, offset: usize, data: []const u8, io: std.Io) !void {
-            _ = self;
+        fn mmio_write(_self: *anyopaque, offset: usize, data: []const u8, io: std.Io) !void {
             _ = io;
-            log.debug("write to 0x{x}, data {x}\n", .{ offset, data });
-            @panic("todo");
+
+            const self: *Self = @ptrCast(@alignCast(_self));
+            log.debug("write from 0x{x}, data {x}\n", .{ offset, data });
+
+            if (offset < @sizeOf(c.virtio_pci_common_cfg)) {
+                try self.handle_generic_cap_write(offset, data);
+            } else {
+                @panic("todo");
+            }
         }
     };
 }
 
 pub const VirtioPciDevice = union(enum) {
-    block: VirtioPci(Block),
+    block: *VirtioPci(Block),
 
     const Self = @This();
 
     pub fn new(
-        base_address: u64,
         kind: VirtioDeviceInit,
-        vm: *Vm,
-        irq_num: u32,
+        bus: *PciBus,
         alloc: std.mem.Allocator,
         io: std.Io,
     ) !Self {
         return switch (kind) {
-            .BlockDevice => |path| .{
-                .block = try VirtioPci(Block).new(
-                    base_address,
-                    VirtioCore(Block).new(try Block.new(path, io), alloc),
-                    vm,
-                    irq_num,
-                ),
+            .BlockDevice => |path| blk: {
+                var device = VirtioCore(Block).new(try Block.new(path, io), alloc);
+                errdefer device.deinit(io);
+
+                break :blk .{ .block = try VirtioPci(Block).new(device, bus, alloc) };
             },
         };
     }
 
-    pub fn write_config(self: *Self, offset: u8, data: []const u8) !void {
-        // Handle BAR writes
-        if (offset >= 0x10 and offset <= 0x10 * 6) {
-            std.debug.assert(offset % 4 == 0);
-            std.debug.assert(data.len == 4);
-
-            const bar = (offset - 0x10) / 4;
-
-            switch (self.*) {
-                inline else => |*device| {
-                    if (bar < device.bars.len) {
-                        if (device.bars[bar]) |b| {
-                            if (std.mem.eql(u8, data[0..4], &.{ 0xff, 0xff, 0xff, 0xff })) {
-                                try device.config.set_bar(@truncate(bar), @truncate(~(b.size - 1)));
-                            } else {
-                                try device.config.set_bar(@truncate(bar), std.mem.readInt(u32, data[0..4], .little));
-                            }
-
-                            return;
-                        }
-                    }
-                },
-            }
-        }
-
-        try self.get_config().write_slice(offset, data);
-    }
-
-    pub fn allocate_bars(self: *Self, alloc: *BarAllocator) !void {
+    pub fn pci_core(self: *Self) *PciDeviceCore {
         return switch (self.*) {
-            inline else => |*device| {
-                for (&device.bars, 0..) |*bar, i| {
-                    std.debug.assert(bar.* == null);
-
-                    bar.* = try alloc.allocate(4096);
-                    try device.config.set_bar(@truncate(i), bar.*.?.value());
-                }
-            },
-        };
-    }
-
-    fn mmio_read(context: *anyopaque, offset: usize, data: []u8, io: std.Io) !void {
-        const self: *Self = @ptrCast(@alignCast(context));
-
-        return switch (self.*) {
-            inline else => |*device| {
-                try device.mmio_read(offset, data, io);
-            },
-        };
-    }
-
-    fn mmio_write(context: *anyopaque, offset: usize, data: []const u8, io: std.Io) !void {
-        const self: *Self = @ptrCast(@alignCast(context));
-
-        return switch (self.*) {
-            inline else => |*device| {
-                try device.mmio_write(offset, data, io);
-            },
-        };
-    }
-
-    pub fn num_bars(self: *const Self) usize {
-        return switch (self.*) {
-            inline else => |*device| device.bars.len,
-        };
-    }
-
-    pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
-        return switch (self.*) {
-            inline else => |*device| {
-                if (idx >= device.bars.len)
-                    return null;
-
-                if (device.bars[idx]) |bar| {
-                    return .{
-                        .base = bar.base,
-                        .size = bar.size,
-                        .dev = .{
-                            .context = self,
-                            .read_fn = mmio_read,
-                            .write_fn = mmio_write,
-                        },
-                    };
-                }
-
-                return null;
-            },
+            inline else => |device| &device.pci,
         };
     }
 
     pub fn deinit(self: *Self, io: std.Io) void {
-        _ = self;
-        _ = io;
-    }
-
-    pub fn get_config(self: *Self) *PciConfigSpace {
-        return switch (self.*) {
-            inline else => |*device| &device.config,
-        };
+        switch (self.*) {
+            inline else => |device| device.deinit(io),
+        }
     }
 };

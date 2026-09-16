@@ -1,10 +1,12 @@
 //! PCI BAR address ranges and allocation.
 
 const std = @import("std");
+const MmioDevice = @import("../root.zig").MmioDevice;
 
 pub const Bar = struct {
     base: u64,
     size: usize,
+    handler: MmioDevice,
 
     const Self = @This();
 
@@ -30,14 +32,18 @@ pub const BarAllocator = struct {
         return .{ .base = base, .size = size, .offset = 0 };
     }
 
-    pub fn allocate(self: *Self, size: usize) !Bar {
+    pub fn allocate(self: *Self, size: usize, handler: MmioDevice) !Bar {
         if (self.offset + size > self.size)
             return error.NoMemory;
 
         if (!std.math.isPowerOfTwo(size))
             return error.InvalidSize;
 
-        const res = Bar{ .base = self.base + self.offset, .size = size };
+        const res = Bar{
+            .base = self.base + self.offset,
+            .size = size,
+            .handler = handler,
+        };
 
         self.offset += size;
         return res;
