@@ -125,6 +125,11 @@ pub const VirtQueue = struct {
         return header;
     }
 
+    pub fn set_elements(self: *Self, val: u32) !void {
+        if (val <= MAX_QUEUE_ELEMENTS and std.math.isPowerOfTwo(val))
+            self.elements = val;
+    }
+
     pub fn push_used(
         self: *Self,
         descriptor_head: u16,

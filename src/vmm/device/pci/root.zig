@@ -10,6 +10,8 @@ pub const BarAllocator = @import("bar.zig").BarAllocator;
 const MmioDevice = @import("../root.zig").MmioDevice;
 const PciConfigSpace = @import("config.zig").PciConfigSpace;
 const PciClass = @import("config.zig").PciClass;
+const msix = @import("msix.zig");
+const Vm = @import("../../root.zig").Vm;
 
 pub const PciBridge = @import("bridge.zig").PciBridge;
 const MAX_DEVICES = 32;
@@ -30,6 +32,8 @@ pub const PciDeviceCore = struct {
     config: PciConfigSpace,
     bars: [6]?Bar = @splat(null),
     active_bars: u8 = 0,
+    msix: ?*msix.Msix = null,
+    bus: *PciBus,
 
     const Self = @This();
 
@@ -41,11 +45,13 @@ pub const PciDeviceCore = struct {
             subclass,
         );
 
-        _ = bus;
-        return .{ .config = config };
+        return .{
+            .config = config,
+            .bus = bus,
+        };
     }
 
-    pub fn new_bridge(vendor_id: u16, device_id: u16, class: PciClass, subclass: u8) Self {
+    pub fn new_bridge(vendor_id: u16, device_id: u16, class: PciClass, subclass: u8, bus: *PciBus) Self {
         const config = PciConfigSpace.new_type0(
             vendor_id,
             device_id,
@@ -53,15 +59,32 @@ pub const PciDeviceCore = struct {
             subclass,
         );
 
-        return .{ .config = config };
+        return .{
+            .config = config,
+            .bus = bus,
+        };
     }
 
-    pub fn allocate_bar(self: *Self, bus: *PciBus, handler: MmioDevice) !u8 {
+    pub fn unmask_irq(self: *Self, vector: usize) !void {
+        try self.msix.?.unmask_irq(vector);
+    }
+
+    pub fn init_msix(self: *Self, irqs: usize, alloc: std.mem.Allocator) !void {
+        self.msix = try msix.Msix.new(self, irqs, alloc);
+    }
+
+    pub fn signal_vector(self: *Self, vm: *Vm, vector: usize) !void {
+        const entry = self.msix.?.table_entry(vector) orelse return error.InvalidVector;
+
+        try vm.msi_signal(entry.address_low, entry.address_high, entry.data);
+    }
+
+    pub fn allocate_bar(self: *Self, handler: MmioDevice) !u8 {
         if (self.active_bars == self.bars.len)
             return error.NoMoreBars;
 
         const bar_idx = self.active_bars;
-        const bar = try bus.allocator.allocate(4096, handler);
+        const bar = try self.bus.allocator.allocate(4096, handler);
         try self.config.set_bar(@truncate(bar_idx), bar.value());
 
         std.debug.assert(self.bars[bar_idx] == null);
@@ -106,6 +129,11 @@ pub const PciDeviceCore = struct {
             return null;
         }
     }
+
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
+        if (self.msix) |m|
+            m.deinit(alloc);
+    }
 };
 
 pub const PciDevice = union(enum) {
@@ -114,10 +142,24 @@ pub const PciDevice = union(enum) {
 
     const Self = @This();
 
-    pub fn deinit(self: *Self, io: std.Io) void {
+    pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
         switch (self.*) {
             .Brigde => {},
-            .Virtio => |*device| device.deinit(io),
+            .Virtio => |*dev| try dev.register_events(vm, id),
+        }
+    }
+
+    pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+        switch (self.*) {
+            .Brigde => return error.UnknownPciEvent,
+            .Virtio => |*dev| try dev.handle_event(fd, io),
+        }
+    }
+
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+        switch (self.*) {
+            .Brigde => {},
+            .Virtio => |*device| device.deinit(alloc, io),
         }
     }
 
@@ -161,9 +203,9 @@ pub const PciBus = struct {
         return .{ .devices = devs, .allocator = allocator };
     }
 
-    pub fn deinit(self: *Self, io: std.Io) void {
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         for (&self.devices) |*slot| {
-            if (slot.*) |*dev| dev.deinit(io);
+            if (slot.*) |*dev| dev.deinit(alloc, io);
             slot.* = null;
         }
     }

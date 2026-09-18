@@ -15,8 +15,9 @@ pub const PciBridge = struct {
     const Self = @This();
 
     pub fn new() Self {
+        // TODO: this is bad...
         return .{
-            .pci = PciDeviceCore.new_bridge(ZVIRT_VENDOR_ID, ZVIRT_BRIDGE_ID, .Brigde, 0),
+            .pci = PciDeviceCore.new_bridge(ZVIRT_VENDOR_ID, ZVIRT_BRIDGE_ID, .Brigde, 0, undefined),
         };
     }
 

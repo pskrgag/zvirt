@@ -26,7 +26,7 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
     self.mmio_bus.deinit(alloc, io);
-    self.io_bus.deinit(io);
+    self.io_bus.deinit(alloc, io);
 }
 
 pub fn handle_event(
@@ -39,6 +39,12 @@ pub fn handle_event(
     switch (source) {
         .io_bus => try self.io_bus.handle_event(id, io),
         .virtio => try self.mmio_bus.handle_event(id, fd, io),
+        .pci => {
+            const bus = self.io_bus.pci_bus() orelse return error.UnknownPciDevice;
+            if (id >= bus.devices.len) return error.UnknownPciDevice;
+            const dev = bus.device(id) orelse return error.UnknownPciDevice;
+            try dev.handle_event(fd, io);
+        },
         else => unreachable,
     }
 }
@@ -88,11 +94,12 @@ pub fn setup_devices(
             var dev = try VirtioPciDevice.new(
                 .{ .BlockDevice = config.block_device },
                 self.io_bus.pci_bus().?,
+                vm,
                 alloc,
                 io,
             );
             const pci_dev = self.io_bus.attach_pci_device(PciDevice{ .Virtio = dev }, 1) catch |err| {
-                dev.deinit(io);
+                dev.deinit(alloc, io);
                 return err;
             };
             const bars = pci_dev.num_bars();
@@ -101,6 +108,7 @@ pub fn setup_devices(
                 if (pci_dev.bar_mmio(i)) |bar|
                     try self.mmio_bus.register_range(bar.base, bar.size, bar.dev);
             }
+            try pci_dev.register_events(vm, 1);
         }
     }
 }

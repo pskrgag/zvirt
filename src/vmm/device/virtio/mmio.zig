@@ -89,8 +89,7 @@ pub fn VirtioMmio(comptime Device: type) type {
 
         fn set_queue_num(self: *Self, val: u32) void {
             if (self.device.queue(self.queue_sel)) |q| {
-                if (val <= MAX_QUEUE_ELEMENTS and std.math.isPowerOfTwo(val))
-                    q.elements = val;
+                try q.set_elements(val);
             }
         }
 

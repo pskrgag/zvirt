@@ -87,6 +87,19 @@ pub const Vm = struct {
         _ = try ioctl(self.fd, c.KVM_IRQ_LINE, @intFromPtr(&irq));
     }
 
+    pub fn msi_signal(self: *const Self, address_lo: u32, address_hi: u32, data: u32) !void {
+        var irq = c.kvm_msi{
+            .address_hi = address_hi,
+            .address_lo = address_lo,
+            .data = data,
+            .flags = 0,
+            .devid = 0,
+            .pad = @splat(0),
+        };
+
+        _ = try ioctl(self.fd, c.KVM_SIGNAL_MSI, @intFromPtr(&irq));
+    }
+
     pub fn create_irqchip(self: *const Self) !void {
         _ = try ioctl(self.fd, c.KVM_CREATE_IRQCHIP, 0);
     }

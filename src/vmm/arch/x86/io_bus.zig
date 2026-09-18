@@ -112,8 +112,9 @@ pub fn new(config: *const VmConfig) Self {
     return self;
 }
 
-pub fn deinit(self: *Self, io: std.Io) void {
-    if (self.pci_bus_obj) |*bus| bus.deinit(io);
+pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+    if (self.pci_bus_obj) |*bus|
+        bus.deinit(alloc, io);
 
     // unwrap here, since if self.original exists, then com1 must also exist
     for (self.orig_tcattr, 0..) |orig, i| {

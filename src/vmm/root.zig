@@ -28,6 +28,7 @@ pub const EventSource = enum(u3) {
     vcpu,
     io_bus,
     virtio,
+    pci,
 };
 
 const EventToken = packed struct(u64) {
@@ -161,6 +162,10 @@ pub const Vm = struct {
         try self.vm.register_irq(eventfd, num);
     }
 
+    pub fn msi_signal(self: *const Self, address_lo: u32, address_hi: u32, data: u32) !void {
+        try self.vm.msi_signal(address_lo, address_hi, data);
+    }
+
     pub fn register_ioevent(
         self: *Self,
         eventfd: *const EventFd,
@@ -292,7 +297,7 @@ pub const Vm = struct {
                             break;
                         }
                     },
-                    .io_bus, .virtio => {
+                    .io_bus, .virtio, .pci => {
                         try self.archvm.device_bus.handle_event(
                             token.source,
                             token.id,
