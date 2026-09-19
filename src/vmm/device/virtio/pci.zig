@@ -16,7 +16,6 @@ pub const c = @cImport({
 const BarMmio = @import("../pci/root.zig").BarMmio;
 const PciDeviceCore = @import("../pci/root.zig").PciDeviceCore;
 const PciBus = @import("../pci/root.zig").PciBus;
-const VirtQueue = @import("queue.zig").VirtQueue;
 
 const log = std.log.scoped(.virtio_pci);
 
@@ -36,21 +35,12 @@ fn check_cfg_access(offset: usize, size: usize) !void {
     return error.InvalidAccess;
 }
 
-fn set_low(value: *u64, low: u32) void {
-    value.* = (value.* & 0xffff_ffff_0000_0000) | @as(u64, low);
-}
-
-fn set_high(value: *u64, high: u32) void {
-    value.* = (value.* & 0x0000_0000_ffff_ffff) |
-        (@as(u64, high) << 32);
-}
-
 fn VirtioPci(comptime Device: type) type {
     return struct {
         device: VirtioCore(Device),
         pci: PciDeviceCore,
         allocator: std.mem.Allocator,
-        mutex: std.Io.Mutex = .init,
+        state_lock: std.Io.Mutex = .init,
         device_sel: u1 = 0,
         driver_sel: u1 = 0,
         change_vector: u32 = c.VIRTIO_MSI_NO_VECTOR,
@@ -158,52 +148,11 @@ fn VirtioPci(comptime Device: type) type {
             allocator.destroy(self);
         }
 
-        fn set_queue_ready(self: *Self, val: u32) !void {
-            if (self.active_queue()) |q|
-                try q.ready(self.vm.memory, val);
-        }
-
-        fn set_queue_num(self: *Self, val: u32) void {
-            if (self.active_queue()) |q|
-                try q.set_elements(val);
-        }
-
-        fn set_queue_desc_low(self: *Self, val: u32) void {
-            if (self.active_queue()) |q|
-                set_low(&q.desc_ring, val);
-        }
-
-        fn set_queue_desc_high(self: *Self, val: u32) void {
-            if (self.active_queue()) |q|
-                set_high(&q.desc_ring, val);
-        }
-
-        fn set_queue_avail_low(self: *Self, val: u32) void {
-            if (self.active_queue()) |q|
-                set_low(&q.available_ring, val);
-        }
-
-        fn set_queue_avail_high(self: *Self, val: u32) void {
-            if (self.active_queue()) |q|
-                set_high(&q.available_ring, val);
-        }
-
-        fn set_queue_used_low(self: *Self, val: u32) void {
-            if (self.active_queue()) |q|
-                set_low(&q.used_ring, val);
-        }
-
-        fn set_queue_used_high(self: *Self, val: u32) void {
-            if (self.active_queue()) |q|
-                set_high(&q.used_ring, val);
-        }
-
-        fn active_queue(self: *Self) ?*VirtQueue {
-            return self.device.queue(self.queue_select);
-        }
-
-        fn handle_generic_cap_write(self: *Self, offset: usize, data: []const u8) !void {
+        fn handle_generic_cap_write(self: *Self, offset: usize, data: []const u8, io: std.Io) !void {
             try check_cfg_access(offset, data.len);
+
+            try self.state_lock.lock(io);
+            defer self.state_lock.unlock(io);
 
             const value: u32 = switch (data.len) {
                 @sizeOf(u8) => data[0],
@@ -218,24 +167,18 @@ fn VirtioPci(comptime Device: type) type {
                 @offsetOf(c.virtio_pci_common_cfg, "guest_feature_select") => self.driver_sel = @truncate(value),
                 @offsetOf(c.virtio_pci_common_cfg, "guest_feature") => self.device.update_driver_feats(value, self.driver_sel != 0),
                 @offsetOf(c.virtio_pci_common_cfg, "msix_config") => {
-                    try self.pci.unmask_irq(value);
+                    // try self.pci.unmask_irq(value);
                     self.change_vector = value;
                 },
                 @offsetOf(c.virtio_pci_common_cfg, "queue_select") => self.queue_select = @truncate(value),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_size") => {
-                    if (self.active_queue()) |queue|
-                        try queue.set_elements(value);
-                },
-                @offsetOf(c.virtio_pci_common_cfg, "queue_avail_lo") => self.set_queue_avail_low(value),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_avail_hi") => self.set_queue_avail_high(value),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_desc_lo") => self.set_queue_desc_low(value),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_desc_hi") => self.set_queue_desc_high(value),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_used_lo") => self.set_queue_used_low(value),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_used_hi") => self.set_queue_used_high(value),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_enable") => {
-                    if (self.active_queue()) |queue|
-                        try queue.ready(self.vm.memory, value);
-                },
+                @offsetOf(c.virtio_pci_common_cfg, "queue_size") => try self.device.set_queue_num(self.queue_select, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_avail_lo") => try self.device.set_queue_avail_low(self.queue_select, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_avail_hi") => try self.device.set_queue_avail_high(self.queue_select, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_desc_lo") => try self.device.set_queue_desc_low(self.queue_select, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_desc_hi") => try self.device.set_queue_desc_high(self.queue_select, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_used_lo") => try self.device.set_queue_used_low(self.queue_select, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_used_hi") => try self.device.set_queue_used_high(self.queue_select, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_enable") => try self.device.set_queue_ready(self.queue_select, self.vm.memory, value, io),
                 @offsetOf(c.virtio_pci_common_cfg, "queue_msix_vector") => {
                     if (self.queue_select < self.queue_vectors.len)
                         self.queue_vectors[self.queue_select] = value;
@@ -244,8 +187,11 @@ fn VirtioPci(comptime Device: type) type {
             }
         }
 
-        fn handle_generic_cap_read(self: *Self, offset: usize, size: usize) !u32 {
+        fn handle_generic_cap_read(self: *Self, offset: usize, size: usize, io: std.Io) !u32 {
             try check_cfg_access(offset, size);
+
+            try self.state_lock.lock(io);
+            defer self.state_lock.unlock(io);
 
             return switch (offset) {
                 @offsetOf(c.virtio_pci_common_cfg, "device_status") => self.device.status,
@@ -259,16 +205,8 @@ fn VirtioPci(comptime Device: type) type {
 
                 // TODO: use one region for all queues (for now)
                 @offsetOf(c.virtio_pci_common_cfg, "queue_notify_off") => 0,
-                @offsetOf(c.virtio_pci_common_cfg, "queue_size") => blk: {
-                    const queue = self.active_queue() orelse break :blk 0;
-
-                    break :blk queue.elements;
-                },
-                @offsetOf(c.virtio_pci_common_cfg, "queue_enable") => blk: {
-                    const queue = self.active_queue() orelse break :blk 0;
-
-                    break :blk queue.is_ready;
-                },
+                @offsetOf(c.virtio_pci_common_cfg, "queue_size") => try self.device.get_queue_num(self.queue_select, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_enable") => try self.device.get_queue_ready(self.queue_select, io),
                 @offsetOf(c.virtio_pci_common_cfg, "queue_msix_vector") => blk: {
                     if (self.queue_select < self.queue_vectors.len)
                         break :blk self.queue_vectors[self.queue_select];
@@ -279,8 +217,12 @@ fn VirtioPci(comptime Device: type) type {
             };
         }
 
-        fn signal_queue(self: *Self, idx: usize) !void {
+        fn signal_queue(self: *Self, idx: usize, io: std.Io) !void {
+            try self.state_lock.lock(io);
+            defer self.state_lock.unlock(io);
+
             const vector = self.queue_vectors[idx];
+
             if (vector != c.VIRTIO_MSI_NO_VECTOR)
                 try self.pci.signal_vector(self.vm, vector);
         }
@@ -294,12 +236,9 @@ fn VirtioPci(comptime Device: type) type {
             if (fd != self.device.event_source())
                 return error.UnknownPciEvent;
 
-            try self.mutex.lock(io);
-            defer self.mutex.unlock(io);
-
             // VirtioCore currently publishes async completions to queue 0.
-            if (try self.device.handle_completion_event())
-                try self.signal_queue(0);
+            if (try self.device.handle_completion_event(io))
+                try self.signal_queue(0, io);
         }
 
         fn handle_notification_write(self: *Self, offset: usize, data: []const u8, io: std.Io) !void {
@@ -313,19 +252,17 @@ fn VirtioPci(comptime Device: type) type {
 
             if (irq) {
                 log.debug("Signaling MSIx for queue {}\n", .{queue});
-                try self.signal_queue(queue);
+                try self.signal_queue(queue, io);
             }
         }
 
         fn mmio_read(_self: *anyopaque, offset: usize, data: []u8, io: std.Io) !void {
             const self: *Self = @ptrCast(@alignCast(_self));
-            try self.mutex.lock(io);
-            defer self.mutex.unlock(io);
 
             log.debug("read from 0x{x}, data {x}\n", .{ offset, data });
 
             const res = if (offset < 128)
-                try self.handle_generic_cap_read(offset, data.len)
+                try self.handle_generic_cap_read(offset, data.len, io)
             else
                 self.device.device.read_config(@truncate(offset - 384));
 
@@ -339,12 +276,11 @@ fn VirtioPci(comptime Device: type) type {
 
         fn mmio_write(_self: *anyopaque, offset: usize, data: []const u8, io: std.Io) !void {
             const self: *Self = @ptrCast(@alignCast(_self));
-            try self.mutex.lock(io);
-            defer self.mutex.unlock(io);
+
             log.debug("write from 0x{x}, data {x}\n", .{ offset, data });
 
             if (offset < 128) {
-                try self.handle_generic_cap_write(offset, data);
+                try self.handle_generic_cap_write(offset, data, io);
             } else if (offset >= 256 and offset < 356) {
                 try self.handle_notification_write(offset - 256, data, io);
             }
@@ -378,7 +314,17 @@ pub const VirtioPciDevice = union(enum) {
     ) !Self {
         return switch (kind) {
             .BlockDevice => |block| blk: {
-                var device = VirtioCore(Block).new(try Block.new(block.path, block.async, io), alloc);
+                const num_queues = if (block.async)
+                    1
+                else
+                    vm.config.smp;
+
+                var device = VirtioCore(Block).new(try Block.new(
+                    block.path,
+                    num_queues,
+                    block.async,
+                    io,
+                ), alloc);
                 errdefer device.deinit(io);
 
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };

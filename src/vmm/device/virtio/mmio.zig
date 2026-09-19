@@ -42,15 +42,6 @@ pub const MmioRegister = enum(u64) {
 const VIRTIO_IRQ_USED_RING: u32 = 1 << 0;
 const VIRTIO_IRQ_CONFIG_CHANGE: u32 = 1 << 1;
 
-fn set_low(value: *u64, low: u32) void {
-    value.* = (value.* & 0xffff_ffff_0000_0000) | @as(u64, low);
-}
-
-fn set_high(value: *u64, high: u32) void {
-    value.* = (value.* & 0x0000_0000_ffff_ffff) |
-        (@as(u64, high) << 32);
-}
-
 pub fn VirtioMmio(comptime Device: type) type {
     return struct {
         // Assuming page size
@@ -73,54 +64,6 @@ pub fn VirtioMmio(comptime Device: type) type {
                 MAX_QUEUE_ELEMENTS
             else
                 0;
-        }
-
-        fn get_queue_ready(self: *Self) u32 {
-            return if (self.device.queue(self.queue_sel)) |q|
-                q.is_ready
-            else
-                0;
-        }
-
-        fn set_queue_ready(self: *Self, val: u32) !void {
-            if (self.device.queue(self.queue_sel)) |q|
-                try q.ready(self.vm.memory, val);
-        }
-
-        fn set_queue_num(self: *Self, val: u32) void {
-            if (self.device.queue(self.queue_sel)) |q| {
-                try q.set_elements(val);
-            }
-        }
-
-        fn set_queue_desc_low(self: *Self, val: u32) void {
-            if (self.device.queue(self.queue_sel)) |q|
-                set_low(&q.desc_ring, val);
-        }
-
-        fn set_queue_desc_high(self: *Self, val: u32) void {
-            if (self.device.queue(self.queue_sel)) |q|
-                set_high(&q.desc_ring, val);
-        }
-
-        fn set_queue_avail_low(self: *Self, val: u32) void {
-            if (self.device.queue(self.queue_sel)) |q|
-                set_low(&q.available_ring, val);
-        }
-
-        fn set_queue_avail_high(self: *Self, val: u32) void {
-            if (self.device.queue(self.queue_sel)) |q|
-                set_high(&q.available_ring, val);
-        }
-
-        fn set_queue_used_low(self: *Self, val: u32) void {
-            if (self.device.queue(self.queue_sel)) |q|
-                set_low(&q.used_ring, val);
-        }
-
-        fn set_queue_used_high(self: *Self, val: u32) void {
-            if (self.device.queue(self.queue_sel)) |q|
-                set_high(&q.used_ring, val);
         }
 
         pub fn new(base: u64, device: VirtioCore(Device), vm: *Vm, irq: u32) !Self {
@@ -167,7 +110,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .VendorId => 0x1AF4,
                     .Status => self.device.status,
                     .QueueNumMax => self.queue_num_max(),
-                    .QueueReady => self.get_queue_ready(),
+                    .QueueReady => try self.device.get_queue_ready(self.queue_sel, io),
                     .DeviceFeatures => if (self.device_sel)
                         @truncate(self.device.device_features >> 32)
                     else
@@ -223,14 +166,14 @@ pub fn VirtioMmio(comptime Device: type) type {
                     },
                     .DeviceFeaturesSel => self.device_sel = data != 0,
                     .DriverFeaturesSel => self.driver_sel = data != 0,
-                    .QueueReady => try self.set_queue_ready(data),
-                    .QueueNum => self.set_queue_num(data),
-                    .QueueDescLow => self.set_queue_desc_low(data),
-                    .QueueDescHigh => self.set_queue_desc_high(data),
-                    .QueueAvailLow => self.set_queue_avail_low(data),
-                    .QueueAvailHigh => self.set_queue_avail_high(data),
-                    .QueueUsedLow => self.set_queue_used_low(data),
-                    .QueueUsedHigh => self.set_queue_used_high(data),
+                    .QueueReady => try self.device.set_queue_ready(self.queue_sel, self.vm.memory, data, io),
+                    .QueueNum => try self.device.set_queue_num(self.queue_sel, data, io),
+                    .QueueDescLow => try self.device.set_queue_desc_low(self.queue_sel, data, io),
+                    .QueueDescHigh => try self.device.set_queue_desc_high(self.queue_sel, data, io),
+                    .QueueAvailLow => try self.device.set_queue_avail_low(self.queue_sel, data, io),
+                    .QueueAvailHigh => try self.device.set_queue_avail_high(self.queue_sel, data, io),
+                    .QueueUsedLow => try self.device.set_queue_used_low(self.queue_sel, data, io),
+                    .QueueUsedHigh => try self.device.set_queue_used_high(self.queue_sel, data, io),
                     .QueueNotify => try self.notify_queue(data, io),
                     .DriverFeatures => self.device.update_driver_feats(data, self.driver_sel),
                     .QueueSel => self.queue_sel = data,
@@ -243,8 +186,8 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        fn handle_completion_event(self: *Self) !void {
-            const completed = try self.device.handle_completion_event();
+        fn handle_completion_event(self: *Self, io: std.Io) !void {
+            const completed = try self.device.handle_completion_event(io);
 
             if (completed) {
                 self.irq_state |= VIRTIO_IRQ_USED_RING;
@@ -282,7 +225,7 @@ pub fn VirtioMmio(comptime Device: type) type {
             defer self.mutex.unlock(io);
 
             if (fd == self.device.event_source()) {
-                try self.handle_completion_event();
+                try self.handle_completion_event(io);
                 return;
             }
 
@@ -325,14 +268,19 @@ pub const VirtioMmioDevice = union(enum) {
         io: std.Io,
     ) !Self {
         return switch (kind) {
-            .BlockDevice => |block| .{
-                .block = try VirtioMmio(Block).new(
+            .BlockDevice => |block| .{ .block = blk: {
+                const num_queues = if (block.async)
+                    1
+                else
+                    vm.config.smp;
+
+                break :blk try VirtioMmio(Block).new(
                     base_address,
-                    VirtioCore(Block).new(try Block.new(block.path, block.async, io), alloc),
+                    VirtioCore(Block).new(try Block.new(block.path, num_queues, block.async, io), alloc),
                     vm,
                     irq_num,
-                ),
-            },
+                );
+            } },
         };
     }
 

@@ -60,7 +60,7 @@ pub const Block = struct {
 
     const Self = @This();
 
-    pub fn new(path: []const u8, async: bool, io: std.Io) !Self {
+    pub fn new(path: []const u8, num_queues: usize, async: bool, io: std.Io) !Self {
         var config = std.mem.zeroes(c.virtio_blk_config);
         var engine = if (async)
             try FileEngine.new_async(MAX_IN_FLIGHT_REQUESTS)
@@ -74,7 +74,7 @@ pub const Block = struct {
 
         const stat = try file.stat(io);
         config.capacity = stat.size / 512;
-        config.num_queues = 1;
+        config.num_queues = @truncate(num_queues);
 
         return .{
             .config = config,

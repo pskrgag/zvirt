@@ -82,6 +82,7 @@ pub const Msix = struct {
     }
 
     pub fn unmask_irq(self: *Self, vector: usize) !void {
+        log.err("vector {}\n", .{vector});
         if (vector < MAX_IRQS) {
             self.table[vector].vector = 0;
         } else {
