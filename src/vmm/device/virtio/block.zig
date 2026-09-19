@@ -33,11 +33,14 @@ const BlockRequest = extern struct {
 
 const MAX_IN_FLIGHT_REQUESTS = 128;
 
-const Token = struct {
-    status: [*]u8,
+const Token = packed struct(u64) {
+    status: u48,
     head: u16,
-    len: usize,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(Token) <= @sizeOf(u64));
+}
 
 pub const Block = struct {
     pub const Completion = struct {
@@ -48,8 +51,6 @@ pub const Block = struct {
     config: c.virtio_blk_config,
     file: std.Io.File,
     engine: FileEngine,
-    requests: [MAX_IN_FLIGHT_REQUESTS]Token = undefined,
-    bitmap: IdAllocator(MAX_IN_FLIGHT_REQUESTS) = .{},
 
     pub const MMIO_TYPE = 0x2;
 
@@ -92,19 +93,19 @@ pub const Block = struct {
     }
 
     pub fn pop_completion(self: *Self) !?Completion {
-        const comp = (try self.engine.pop_completion(usize)) orelse return null;
+        const comp = (try self.engine.pop_completion(u64)) orelse return null;
 
-        const token = &self.requests[comp.token];
-        defer self.bitmap.free(comp.token);
+        const token: Token = @bitCast(comp.token);
+        const status: [*]u8 = @ptrFromInt(token.status);
 
         log.debug("Async event finished {}\n", .{comp});
 
         var len: u32 = 1;
         if (comp.res > 0) {
-            token.status[0] = VIRTIO_BLK_S_OK;
+            status[0] = VIRTIO_BLK_S_OK;
             len = @as(u32, @intCast(comp.res)) + 1;
         } else {
-            token.status[0] = VIRTIO_BLK_S_IOERR;
+            status[0] = VIRTIO_BLK_S_IOERR;
         }
 
         return .{ .head = token.head, .len = len };
@@ -168,29 +169,27 @@ pub const Block = struct {
                     return error.InvalidFormat;
                 };
 
-                const id = self.bitmap.allocate() orelse @panic("todo");
+                std.debug.assert(@intFromPtr(status.ptr) <= std.math.maxInt(@FieldType(Token, "status")));
+                const token = Token{
+                    .status = @truncate(@intFromPtr(status.ptr)),
+                    .head = req.head,
+                };
+                const value: u64 = @bitCast(token);
 
-                self.requests[id].status = status.ptr;
-                self.requests[id].head = req.head;
-
-                errdefer self.bitmap.free(id);
-
-                try self.engine.register_read(self.file.handle, to_write, blkreq.sector * 512, id);
-                log.debug("Registered async read {}\n", .{id});
+                try self.engine.register_read(self.file.handle, to_write, blkreq.sector * 512, value);
                 return null;
             },
             .Write => {
                 const to_read = requests[1].as_ro();
 
-                const id = self.bitmap.allocate() orelse @panic("todo");
+                std.debug.assert(@intFromPtr(status.ptr) <= std.math.maxInt(@FieldType(Token, "status")));
+                const token = Token{
+                    .status = @truncate(@intFromPtr(status.ptr)),
+                    .head = req.head,
+                };
+                const value: u64 = @bitCast(token);
 
-                self.requests[id].status = status.ptr;
-                self.requests[id].head = req.head;
-
-                errdefer self.bitmap.free(id);
-
-                try self.engine.register_write(self.file.handle, to_read, blkreq.sector * 512, id);
-                log.debug("Registered async write {}\n", .{id});
+                try self.engine.register_write(self.file.handle, to_read, blkreq.sector * 512, value);
                 return null;
             },
             .Flush => {

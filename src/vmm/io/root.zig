@@ -5,7 +5,7 @@ const linux = std.os.linux;
 const posix = std.posix;
 const EventFd = @import("utils").EventFd.EventFd;
 
-const log = std.log.scoped(.io_uring);
+const log = std.log.scoped(.file_engine);
 
 fn token_to_u64(token: anytype) u64 {
     const T = @TypeOf(token);
