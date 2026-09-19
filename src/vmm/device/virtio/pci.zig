@@ -286,7 +286,8 @@ fn VirtioPci(comptime Device: type) type {
         }
 
         pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
-            try vm.register_fd(self.device.event_source(), id, .pci);
+            if (self.device.event_source()) |event|
+                try vm.register_fd(event, id, .pci);
         }
 
         pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {

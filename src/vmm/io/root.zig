@@ -56,7 +56,112 @@ pub fn Completion(T: type) type {
     };
 }
 
-pub const FileEngine = struct {
+pub const FileEngine = union(enum) {
+    Async: FileEngineAsync,
+    Sync: FileEngineSync,
+
+    const Self = @This();
+
+    pub fn ack_event(self: *Self) !void {
+        switch (self.*) {
+            .Async => |*engine| try engine.ack_event(),
+            .Sync => @panic("invalid call"),
+        }
+    }
+
+    pub fn event_source(self: *const Self) ?std.posix.fd_t {
+        return switch (self.*) {
+            .Async => |*engine| engine.event.as_fd(),
+            .Sync => null,
+        };
+    }
+
+    pub fn new_async(num_entries: u16) !Self {
+        return .{ .Async = try FileEngineAsync.new(num_entries) };
+    }
+
+    pub fn deinit(self: *Self) void {
+        switch (self.*) {
+            inline else => |*engine| engine.deinit(),
+        }
+    }
+
+    pub fn pop_completion(self: *Self, T: type) !?Completion(T) {
+        return switch (self.*) {
+            .Async => |*engine| engine.pop_completion(T),
+            .Sync => @panic("invalid call"),
+        };
+    }
+
+    pub fn submit(self: *Self) !void {
+        return switch (self.*) {
+            .Async => |*engine| engine.submit(),
+            .Sync => {},
+        };
+    }
+
+    pub fn read(self: *Self, fd: posix.fd_t, to: []u8, offset: usize, context: anytype) !?usize {
+        return switch (self.*) {
+            .Async => |*engine| blk: {
+                try engine.register_read(fd, to, offset, context);
+                break :blk null;
+            },
+            .Sync => |*engine| try engine.read(fd, to, offset),
+        };
+    }
+
+    pub fn write(
+        self: *Self,
+        fd: posix.fd_t,
+        from: []const u8,
+        offset: usize,
+        context: anytype,
+    ) !?usize {
+        return switch (self.*) {
+            .Async => |*engine| blk: {
+                try engine.register_write(fd, from, offset, context);
+                break :blk null;
+            },
+            .Sync => |*engine| try engine.write(fd, from, offset),
+        };
+    }
+};
+
+pub const FileEngineSync = struct {
+    const Self = @This();
+
+    pub fn new() !Self {
+        return .{};
+    }
+
+    pub fn deinit(self: *Self) void {
+        _ = self;
+    }
+
+    pub fn write(self: *Self, fd: posix.fd_t, from: []const u8, offset: usize) !usize {
+        _ = self;
+
+        const res = std.os.linux.pwrite(fd, from.ptr, from.len, @intCast(offset));
+
+        return switch (linux.errno(res)) {
+            .SUCCESS => res,
+            else => error.FailedToWrite,
+        };
+    }
+
+    pub fn read(self: *Self, fd: posix.fd_t, to: []u8, offset: usize) !usize {
+        _ = self;
+
+        const res = std.os.linux.pread(fd, to.ptr, to.len, @intCast(offset));
+
+        return switch (linux.errno(res)) {
+            .SUCCESS => res,
+            else => error.FailedToRead,
+        };
+    }
+};
+
+pub const FileEngineAsync = struct {
     uring: linux.IoUring,
     event: EventFd,
 
@@ -124,10 +229,64 @@ pub const FileEngine = struct {
     }
 };
 
+test "Sync engine read returns data immediately and handles EOF" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(io, "test_file", .{ .read = true });
+    defer file.close(io);
+    try file.writePositionalAll(io, "hello world", 0);
+
+    var engine = FileEngine{ .Sync = try FileEngineSync.new() };
+    defer engine.deinit();
+    try std.testing.expectEqual(null, engine.event_source());
+
+    var buffer: [32]u8 = @splat(0xaa);
+    const count = try engine.read(file.handle, &buffer, 6, &tmp);
+
+    try std.testing.expectEqual(@as(?usize, 5), count);
+    try std.testing.expectEqualSlices(u8, "world", buffer[0..5]);
+    try std.testing.expectEqual(@as(u8, 0xaa), buffer[5]);
+    try std.testing.expectEqual(@as(?usize, 0), try engine.read(file.handle, &buffer, 11, &tmp));
+    try std.testing.expectEqual(@as(?usize, 0), try engine.read(file.handle, &buffer, 20, &tmp));
+    try engine.submit();
+}
+
+test "Sync engine write completes immediately at the requested offset" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(io, "test_file", .{ .read = true });
+    defer file.close(io);
+    try file.writePositionalAll(io, "hello world!", 0);
+
+    var engine = FileEngine{ .Sync = try FileEngineSync.new() };
+    defer engine.deinit();
+    try std.testing.expectEqual(null, engine.event_source());
+    try std.testing.expectEqual(@as(?usize, 5), try engine.write(file.handle, "there", 6, &tmp));
+
+    // No submit or completion event is needed to observe the write.
+    var buffer: [32]u8 = undefined;
+    const count = try file.readPositionalAll(io, &buffer, 0);
+    try std.testing.expectEqualSlices(u8, "hello there!", buffer[0..count]);
+    try engine.submit();
+}
+
+test "Sync engine propagates read and write errors" {
+    var engine = FileEngine{ .Sync = try FileEngineSync.new() };
+    defer engine.deinit();
+
+    var buffer: [1]u8 = undefined;
+    try std.testing.expectError(error.FailedToRead, engine.read(-1, &buffer, 0, @as(usize, 0)));
+    try std.testing.expectError(error.FailedToWrite, engine.write(-1, "x", 0, @as(usize, 0)));
+}
+
 fn wait_for_test_event(engine: *FileEngine) !void {
     var epoll = try @import("utils").Epoll.Epoll.new();
     defer epoll.deinit();
-    try epoll.add(engine.event.as_fd(), 0);
+    try epoll.add(engine.event_source().?, 0);
 
     var events: [1]linux.epoll_event = undefined;
     const ready = try epoll.wait(&events, 1000);
@@ -149,10 +308,11 @@ test "Basic read completion" {
     defer file.close(io);
     try file.writePositionalAll(io, message, 0);
 
-    var engine = try FileEngine.new(32);
+    var engine = try FileEngine.new_async(32);
     defer engine.deinit();
+
     try std.testing.expectEqual(null, try engine.pop_completion(@TypeOf(&tmp)));
-    try engine.register_read(file.handle, &buffer, 0, &tmp);
+    try std.testing.expectEqual(try engine.read(file.handle, &buffer, 0, &tmp), null);
     try engine.submit();
 
     try wait_for_test_event(&engine);
@@ -163,7 +323,7 @@ test "Basic read completion" {
     try std.testing.expectEqualSlices(u8, message, buffer[0..message.len]);
 
     try std.testing.expectEqual(null, try engine.pop_completion(@TypeOf(&tmp)));
-    try std.testing.expectError(error.WouldBlock, engine.event.read());
+    try std.testing.expectError(error.WouldBlock, engine.ack_event());
 }
 
 test "Basic write completion" {
@@ -177,10 +337,11 @@ test "Basic write completion" {
     const file = try tmp.dir.createFile(io, "test_file", .{ .read = true });
     defer file.close(io);
 
-    var engine = try FileEngine.new(32);
+    var engine = try FileEngine.new_async(32);
     defer engine.deinit();
+
     try std.testing.expectEqual(null, try engine.pop_completion(@TypeOf(&tmp)));
-    try engine.register_write(file.handle, message, 0, &tmp);
+    try std.testing.expectEqual(null, try engine.write(file.handle, message, 0, &tmp));
     try engine.submit();
 
     try wait_for_test_event(&engine);
@@ -193,5 +354,5 @@ test "Basic write completion" {
     try std.testing.expectEqualSlices(u8, message, buffer[0..res]);
 
     try std.testing.expectEqual(null, try engine.pop_completion(@TypeOf(&tmp)));
-    try std.testing.expectError(error.WouldBlock, engine.event.read());
+    try std.testing.expectError(error.WouldBlock, engine.ack_event());
 }

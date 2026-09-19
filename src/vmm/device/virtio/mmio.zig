@@ -253,7 +253,8 @@ pub fn VirtioMmio(comptime Device: type) type {
         }
 
         pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
-            try vm.register_fd(self.device.event_source(), id, .virtio);
+            if (self.device.event_source()) |event|
+                try vm.register_fd(event, id, .virtio);
 
             for (self.notifyfds[0..self.device.max_queues()], 0..) |notifyfd, queue_idx| {
                 try vm.register_ioevent(

@@ -62,7 +62,7 @@ pub const Block = struct {
 
     pub fn new(path: []const u8, io: std.Io) !Self {
         var config = std.mem.zeroes(c.virtio_blk_config);
-        var engine = try FileEngine.new(MAX_IN_FLIGHT_REQUESTS);
+        var engine = try FileEngine.new_async(MAX_IN_FLIGHT_REQUESTS);
         errdefer engine.deinit();
 
         var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
@@ -79,8 +79,8 @@ pub const Block = struct {
         };
     }
 
-    pub fn event_source(self: *const Self) std.posix.fd_t {
-        return self.engine.event.as_fd();
+    pub fn event_source(self: *const Self) ?std.posix.fd_t {
+        return self.engine.event_source();
     }
 
     pub fn deinit(self: *Self, io: std.Io) void {
@@ -176,7 +176,10 @@ pub const Block = struct {
                 };
                 const value: u64 = @bitCast(token);
 
-                try self.engine.register_read(self.file.handle, to_write, blkreq.sector * 512, value);
+                const res = try self.engine.read(self.file.handle, to_write, blkreq.sector * 512, value);
+                if (res) |r|
+                    return @truncate(r);
+
                 return null;
             },
             .Write => {
@@ -189,7 +192,10 @@ pub const Block = struct {
                 };
                 const value: u64 = @bitCast(token);
 
-                try self.engine.register_write(self.file.handle, to_read, blkreq.sector * 512, value);
+                const res = try self.engine.write(self.file.handle, to_read, blkreq.sector * 512, value);
+                if (res) |r|
+                    return @truncate(r);
+
                 return null;
             },
             .Flush => {

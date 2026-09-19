@@ -136,7 +136,7 @@ pub fn VirtioCore(comptime Device: type) type {
                 null;
         }
 
-        pub fn event_source(self: *const Self) std.posix.fd_t {
+        pub fn event_source(self: *const Self) ?std.posix.fd_t {
             return self.device.event_source();
         }
 
