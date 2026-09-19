@@ -130,8 +130,10 @@ fn parse_block_device(data: []const u8) !struct { path: []const u8, async: bool 
 
             if (std.mem.eql(u8, value, "async")) {
                 async = true;
-            } else if (std.mem.eql(u8, key, "sync")) {
+            } else if (std.mem.eql(u8, value, "sync")) {
                 async = false;
+            } else {
+                return error.InvalidKey;
             }
         } else {
             return error.InvalidKey;
