@@ -377,8 +377,8 @@ pub const VirtioPciDevice = union(enum) {
         io: std.Io,
     ) !Self {
         return switch (kind) {
-            .BlockDevice => |path| blk: {
-                var device = VirtioCore(Block).new(try Block.new(path, io), alloc);
+            .BlockDevice => |block| blk: {
+                var device = VirtioCore(Block).new(try Block.new(block.path, block.async, io), alloc);
                 errdefer device.deinit(io);
 
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };

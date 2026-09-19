@@ -325,10 +325,10 @@ pub const VirtioMmioDevice = union(enum) {
         io: std.Io,
     ) !Self {
         return switch (kind) {
-            .BlockDevice => |path| .{
+            .BlockDevice => |block| .{
                 .block = try VirtioMmio(Block).new(
                     base_address,
-                    VirtioCore(Block).new(try Block.new(path, io), alloc),
+                    VirtioCore(Block).new(try Block.new(block.path, block.async, io), alloc),
                     vm,
                     irq_num,
                 ),

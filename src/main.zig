@@ -106,6 +106,41 @@ fn parse_memory(memory: []const u8) !usize {
     };
 }
 
+fn parse_block_device(data: []const u8) !struct { path: []const u8, async: bool } {
+    var parts = std.mem.splitScalar(u8, data, ',');
+    var path: []const u8 = "";
+    var async: ?bool = null;
+
+    std.debug.print("{s}\n", .{data});
+
+    while (parts.next()) |part| {
+        std.debug.print("{s}\n", .{part});
+        const del = std.mem.find(u8, part, "=") orelse return error.InvalidFormat;
+        const key = part[0..del];
+        const value = part[del + 1 ..];
+
+        if (std.mem.eql(u8, key, "file")) {
+            if (path.len != 0)
+                return error.AlreadySet;
+
+            path = value;
+        } else if (std.mem.eql(u8, key, "engine")) {
+            if (async != null)
+                return error.AlreadySet;
+
+            if (std.mem.eql(u8, value, "async")) {
+                async = true;
+            } else if (std.mem.eql(u8, key, "sync")) {
+                async = false;
+            }
+        } else {
+            return error.InvalidKey;
+        }
+    }
+
+    return .{ .path = path, .async = async orelse true };
+}
+
 fn run() !void {
     runtime_log_level = std.meta.stringToEnum(std.log.Level, config.log_level) orelse {
         log.err("invalid log level '{s}'; expected err, warn, info, or debug", .{config.log_level});
@@ -147,11 +182,13 @@ fn run() !void {
         }
     }
 
+    const block = try parse_block_device(config.block_device);
+
     var vm = try Vm.new(.{
         .ram_size = memory_size,
         .binary = kernel_bytes,
         .initramfs = initramfs,
-        .block_device = config.block_device,
+        .block_device = .{ .path = block.path, .async = block.async },
         .cmdline = config.cmdline,
         .smp = smp,
         .pci = config.enable_pci,

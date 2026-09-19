@@ -14,7 +14,7 @@ pub const VirtioDeviceType = enum(u32) {
 };
 
 pub const VirtioDeviceInit = union(VirtioDeviceType) {
-    BlockDevice: []const u8,
+    BlockDevice: struct { path: []const u8, async: bool },
 };
 
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;

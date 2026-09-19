@@ -48,7 +48,10 @@ pub const VmConfig = struct {
     initramfs: ?[]const u8 = null,
 
     // Block device (path to the image)
-    block_device: []const u8 = "",
+    block_device: struct {
+        path: []const u8 = "",
+        async: bool = true,
+    } = .{},
 
     // Kernel cmdline
     cmdline: []const u8 = "",
@@ -895,7 +898,7 @@ test "linux reaches console" {
     thread.join();
 }
 
-fn test_virtio_read(pci: bool) !void {
+fn test_virtio_read(pci: bool, async: bool) !void {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
@@ -932,7 +935,7 @@ fn test_virtio_read(pci: bool) !void {
         .ram_size = 1 << 30,
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
-        .block_device = disk_path,
+        .block_device = .{ .path = disk_path, .async = async },
         .pci = pci,
     }, io, allocator);
     defer vm.deinit(allocator, io);
@@ -967,15 +970,23 @@ fn test_virtio_read(pci: bool) !void {
     try expect_file_hash(&initrd_stdout, disk.file);
 }
 
-test "Virtio MMIO IO read" {
-    try test_virtio_read(false);
+test "Virtio MMIO IO read (async)" {
+    try test_virtio_read(false, true);
 }
 
-test "Virtio PCI IO read" {
-    try test_virtio_read(true);
+test "Virtio PCI IO read (async)" {
+    try test_virtio_read(true, true);
 }
 
-fn test_virtio_write(pci: bool) !void {
+test "Virtio MMIO IO read (sync)" {
+    try test_virtio_read(false, false);
+}
+
+test "Virtio PCI IO read (sync)" {
+    try test_virtio_read(true, false);
+}
+
+fn test_virtio_write(pci: bool, async: bool) !void {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
@@ -1012,7 +1023,7 @@ fn test_virtio_write(pci: bool) !void {
         .ram_size = 1 << 30,
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
-        .block_device = disk_path,
+        .block_device = .{ .path = disk_path, .async = async },
         .pci = pci,
     }, io, allocator);
     defer vm.deinit(allocator, io);
@@ -1038,12 +1049,20 @@ fn test_virtio_write(pci: bool) !void {
     try std.testing.expectEqualSlices(u8, &expected, &actual);
 }
 
-test "Virtio MMIO IO write" {
-    try test_virtio_write(false);
+test "Virtio MMIO IO write (async)" {
+    try test_virtio_write(false, true);
 }
 
-test "Virtio PCI IO write" {
-    try test_virtio_write(true);
+test "Virtio PCI IO write (async)" {
+    try test_virtio_write(true, true);
+}
+
+test "Virtio MMIO IO write (sync)" {
+    try test_virtio_write(false, false);
+}
+
+test "Virtio PCI IO write (sync)" {
+    try test_virtio_write(true, false);
 }
 
 test "SMP works" {

@@ -72,7 +72,7 @@ pub fn setup_devices(
     alloc: std.mem.Allocator,
     io: std.Io,
 ) !void {
-    if (config.block_device.len != 0) {
+    if (config.block_device.path.len != 0) {
         const base = layout.virtio_device(config, 0);
         const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
 
@@ -81,7 +81,10 @@ pub fn setup_devices(
         if (!config.pci) {
             var dev = try VirtioMmioDevice.new(
                 base,
-                .{ .BlockDevice = config.block_device },
+                .{ .BlockDevice = .{
+                    .path = config.block_device.path,
+                    .async = config.block_device.async,
+                } },
                 vm,
                 @truncate(irq),
                 alloc,
@@ -92,7 +95,10 @@ pub fn setup_devices(
             try self.mmio_bus.register_device(vm, dev);
         } else {
             var dev = try VirtioPciDevice.new(
-                .{ .BlockDevice = config.block_device },
+                .{ .BlockDevice = .{
+                    .path = config.block_device.path,
+                    .async = config.block_device.async,
+                } },
                 self.io_bus.pci_bus().?,
                 vm,
                 alloc,

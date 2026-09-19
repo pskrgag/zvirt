@@ -76,6 +76,10 @@ pub const FileEngine = union(enum) {
         };
     }
 
+    pub fn new_sync() !Self {
+        return .{ .Sync = try FileEngineSync.new() };
+    }
+
     pub fn new_async(num_entries: u16) !Self {
         return .{ .Async = try FileEngineAsync.new(num_entries) };
     }

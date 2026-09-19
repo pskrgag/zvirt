@@ -60,9 +60,13 @@ pub const Block = struct {
 
     const Self = @This();
 
-    pub fn new(path: []const u8, io: std.Io) !Self {
+    pub fn new(path: []const u8, async: bool, io: std.Io) !Self {
         var config = std.mem.zeroes(c.virtio_blk_config);
-        var engine = try FileEngine.new_async(MAX_IN_FLIGHT_REQUESTS);
+        var engine = if (async) 
+            try FileEngine.new_async(MAX_IN_FLIGHT_REQUESTS)
+        else
+            try FileEngine.new_sync();
+
         errdefer engine.deinit();
 
         var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
@@ -177,8 +181,10 @@ pub const Block = struct {
                 const value: u64 = @bitCast(token);
 
                 const res = try self.engine.read(self.file.handle, to_write, blkreq.sector * 512, value);
-                if (res) |r|
-                    return @truncate(r);
+                if (res) |r| {
+                    status[0] = VIRTIO_BLK_S_OK;
+                    return @truncate(r + 1);
+                }
 
                 return null;
             },
@@ -193,8 +199,10 @@ pub const Block = struct {
                 const value: u64 = @bitCast(token);
 
                 const res = try self.engine.write(self.file.handle, to_read, blkreq.sector * 512, value);
-                if (res) |r|
-                    return @truncate(r);
+                if (res) |r| {
+                    status[0] = VIRTIO_BLK_S_OK;
+                    return @truncate(r + 1);
+                }
 
                 return null;
             },
