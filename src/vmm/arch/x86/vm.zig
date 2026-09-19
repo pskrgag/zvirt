@@ -16,7 +16,7 @@ const acpi = @import("acpi.zig");
 
 pub const DeviceBus = @import("device_bus.zig");
 pub const layout = @import("layout.zig");
-const DEFAULT_CMD_LINE: []const u8 = "console=ttyS0 earlycon=uart,io,0x3f8 nokaslr pci=off panic=-1 reboot=t";
+const DEFAULT_CMD_LINE: []const u8 = "console=ttyS0 earlycon=uart,io,0x3f8 nokaslr panic=-1 reboot=t";
 
 // Long-mode enable
 const EFER_LME = 1 << 8;
@@ -138,6 +138,14 @@ pub const ArchVm = struct {
             user_cmdline
         else
             DEFAULT_CMD_LINE});
+
+        if (!vm.config.pci) {
+            const old_line = cmd_line;
+
+            cmd_line = try std.fmt.allocPrint(alloc, "{s} pci=off", .{old_line});
+            alloc.free(old_line);
+        }
+
         defer alloc.free(cmd_line);
 
         for (self.device_bus.mmio_bus.virtio_devs.items) |dev| {

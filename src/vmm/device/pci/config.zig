@@ -9,6 +9,7 @@ const TYPE0_CLASS_OFFSET = 0xb;
 const TYPE0_SUBCLASS_OFFSET = 0xa;
 const TYPE0_STATUS_OFFSET = 0x6;
 const TYPE0_CAP_POINTER_OFFSET = 0x34;
+const log = std.log.scoped(.pci_bar);
 
 pub const PCI_STATUS_CAP_LIST = 0x10;
 
@@ -98,7 +99,7 @@ pub const PciConfigSpace = struct {
         if (bar_idx > 5)
             return error.InvalidBar;
 
-        std.debug.print("set bar {x}\n", .{raw});
+        log.debug("set bar {x}\n", .{raw});
         self.write(u32, bar_offset(bar_idx), raw) catch @panic("");
     }
 

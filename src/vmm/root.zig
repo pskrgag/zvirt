@@ -895,7 +895,7 @@ test "linux reaches console" {
     thread.join();
 }
 
-test "Virtio IO read" {
+fn test_virtio_read(pci: bool) !void {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
@@ -933,6 +933,7 @@ test "Virtio IO read" {
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
         .block_device = disk_path,
+        .pci = pci,
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
@@ -966,7 +967,15 @@ test "Virtio IO read" {
     try expect_file_hash(&initrd_stdout, disk.file);
 }
 
-test "Virtio IO write" {
+test "Virtio MMIO IO read" {
+    try test_virtio_read(false);
+}
+
+test "Virtio PCI IO read" {
+    try test_virtio_read(true);
+}
+
+fn test_virtio_write(pci: bool) !void {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
@@ -1004,6 +1013,7 @@ test "Virtio IO write" {
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
         .block_device = disk_path,
+        .pci = pci,
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
@@ -1026,6 +1036,14 @@ test "Virtio IO write" {
     const expected = hash_write_pattern(write_test_seed, write_test_size);
     const actual = try hash_file(disk.file);
     try std.testing.expectEqualSlices(u8, &expected, &actual);
+}
+
+test "Virtio MMIO IO write" {
+    try test_virtio_write(false);
+}
+
+test "Virtio PCI IO write" {
+    try test_virtio_write(true);
 }
 
 test "SMP works" {
