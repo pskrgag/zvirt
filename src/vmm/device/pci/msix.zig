@@ -3,6 +3,7 @@
 const std = @import("std");
 const PciDeviceCore = @import("root.zig").PciDeviceCore;
 const PciBus = @import("root.zig").PciBus;
+const Vm = @import("../../root.zig").Vm;
 
 const log = std.log.scoped(.pci_msix);
 
@@ -10,7 +11,7 @@ const MessageControl = packed struct(u16) {
     table_count: u11,
     _reserved: u3 = 0,
     mask_all: u1 = 0,
-    msix_enalbe: u1 = 1,
+    msix_enalbe: u1 = 0,
 };
 
 const TableAddress = packed struct(u32) {
@@ -41,6 +42,8 @@ const MAX_IRQS = std.math.maxInt(TableCountType);
 pub const Msix = struct {
     max_irqs: usize,
     table: [MAX_IRQS]TableEntry = @splat(.{}),
+    cap: usize,
+    mutex: std.Io.Mutex = .init,
 
     const Self = @This();
 
@@ -66,34 +69,52 @@ pub const Msix = struct {
             .pending_bit_array = .{ .bar = @truncate(bar), .offset = @truncate(table_size) },
         };
 
-        try core.config.add_capability(std.mem.asBytes(&cap));
-
         self.* = .{
             .max_irqs = max_irqs,
+            .cap = try core.config.add_capability(std.mem.asBytes(&cap)),
         };
+
+        core.config.set_write_write_mask(u16, 3 << 14, self.cap + 2);
         return self;
     }
 
-    pub fn table_entry(self: *const Self, idx: usize) ?TableEntry {
-        if (idx < self.table.len)
-            return self.table[idx];
+    pub fn is_enabled(self: *Self, core: *PciDeviceCore, io: std.Io) bool {
+        const control = core.read_config(u16, @intCast(self.cap + 2), io) catch {
+            @panic("Corrupted config space?");
+        };
 
-        return null;
+        return (control & (1 << 15)) != 0 and (control & (1 << 14)) == 0;
     }
 
-    pub fn unmask_irq(self: *Self, vector: usize) !void {
-        log.err("vector {}\n", .{vector});
-        if (vector < MAX_IRQS) {
-            self.table[vector].vector = 0;
-        } else {
-            return error.InvalidIrq;
+    pub fn signal(self: *Self, core: *PciDeviceCore, idx: usize, vm: *Vm, io: std.Io) !void {
+        if (idx >= self.table.len)
+            return error.OutOfBounds;
+
+        if (!self.is_enabled(core, io)) {
+            return;
         }
+
+        const entry = blk: {
+            try self.mutex.lock(io);
+            defer self.mutex.unlock(io);
+
+            break :blk self.table[idx];
+        };
+
+        if (entry.vector & 1 != 0) {
+            return;
+        }
+
+        try vm.msi_signal(entry.address_low, entry.address_high, entry.data);
     }
 
-    fn handle_table_write(self: *Self, offset: usize, data: []const u8) !void {
+    fn handle_table_write(self: *Self, offset: usize, data: []const u8, io: std.Io) !void {
         // only one entry for now
         std.debug.assert(offset % 4 == 0);
         std.debug.assert(data.len == 4);
+
+        try self.mutex.lock(io);
+        defer self.mutex.unlock(io);
 
         const val = std.mem.readInt(u32, data[0..@sizeOf(u32)], .little);
 
@@ -109,9 +130,12 @@ pub const Msix = struct {
         }
     }
 
-    fn handle_table_read(self: *Self, offset: usize) !u32 {
+    fn handle_table_read(self: *Self, offset: usize, io: std.Io) !u32 {
         // only one entry for now
         std.debug.assert(offset % 4 == 0);
+
+        try self.mutex.lock(io);
+        defer self.mutex.unlock(io);
 
         const idx = offset / @sizeOf(TableEntry);
         const off = offset % @sizeOf(TableEntry);
@@ -120,8 +144,6 @@ pub const Msix = struct {
     }
 
     fn mmio_read(_self: *anyopaque, offset: usize, data: []u8, io: std.Io) !void {
-        _ = io;
-
         var self: *Self = @ptrCast(@alignCast(_self));
         const pba_offset = self.max_irqs * @sizeOf(TableEntry);
 
@@ -129,7 +151,7 @@ pub const Msix = struct {
         log.debug("read from 0x{x}, data {x}\n", .{ offset, data });
 
         const val = if (offset < pba_offset)
-            try self.handle_table_read(offset)
+            try self.handle_table_read(offset, io)
         else
             @panic("todo");
 
@@ -137,14 +159,12 @@ pub const Msix = struct {
     }
 
     fn mmio_write(_self: *anyopaque, offset: usize, data: []const u8, io: std.Io) !void {
-        _ = io;
-
         var self: *Self = @ptrCast(@alignCast(_self));
         const pba_offset = self.max_irqs * @sizeOf(TableEntry);
 
         log.debug("write from 0x{x}, data {x}\n", .{ offset, data });
         if (offset < pba_offset) {
-            try self.handle_table_write(offset, data);
+            try self.handle_table_write(offset, data, io);
         } else {
             @panic("todo");
         }

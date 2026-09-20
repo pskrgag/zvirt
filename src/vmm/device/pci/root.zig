@@ -34,6 +34,7 @@ pub const PciDeviceCore = struct {
     active_bars: u8 = 0,
     msix: ?*msix.Msix = null,
     bus: *PciBus,
+    mutex: std.Io.Mutex = .init,
 
     const Self = @This();
 
@@ -65,20 +66,16 @@ pub const PciDeviceCore = struct {
         };
     }
 
-    pub fn unmask_irq(self: *Self, vector: usize) !void {
-        try self.msix.?.unmask_irq(vector);
-    }
-
+    // Thread unsafe
     pub fn init_msix(self: *Self, irqs: usize, alloc: std.mem.Allocator) !void {
         self.msix = try msix.Msix.new(self, irqs, alloc);
     }
 
-    pub fn signal_vector(self: *Self, vm: *Vm, vector: usize) !void {
-        const entry = self.msix.?.table_entry(vector) orelse return error.InvalidVector;
-
-        try vm.msi_signal(entry.address_low, entry.address_high, entry.data);
+    pub fn signal_vector(self: *Self, vm: *Vm, vector: usize, io: std.Io) !void {
+        try self.msix.?.signal(self, vector, vm, io);
     }
 
+    // Thread unsafe
     pub fn allocate_bar(self: *Self, handler: MmioDevice) !u8 {
         if (self.active_bars == self.bars.len)
             return error.NoMoreBars;
@@ -94,7 +91,10 @@ pub const PciDeviceCore = struct {
         return bar_idx;
     }
 
-    pub fn write_config(self: *Self, offset: u8, data: []const u8) !void {
+    pub fn write_config(self: *Self, offset: u8, data: []const u8, io: std.Io) !void {
+        try self.mutex.lock(io);
+        defer self.mutex.unlock(io);
+
         // Handle BAR writes
         if (offset >= 0x10 and offset < 0x28) {
             std.debug.assert(offset % 4 == 0);
@@ -118,6 +118,14 @@ pub const PciDeviceCore = struct {
         try self.config.write_slice(offset, data);
     }
 
+    pub fn read_config(self: *Self, T: type, offset: u8, io: std.Io) !T {
+        try self.mutex.lock(io);
+        defer self.mutex.unlock(io);
+
+        return try self.config.read(T, offset);
+    }
+
+    // Thread unsafe
     pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
         if (self.bars[idx]) |bar| {
             return .{
@@ -163,15 +171,15 @@ pub const PciDevice = union(enum) {
         }
     }
 
-    pub fn read_config(self: *Self, offset: u8) !u32 {
+    pub fn read_config(self: *Self, offset: u8, io: std.Io) !u32 {
         return switch (self.*) {
-            inline else => |*device| device.pci_core().config.read(u32, offset),
+            inline else => |*device| device.pci_core().read_config(u32, offset, io),
         };
     }
 
-    pub fn write_config(self: *Self, offset: u8, data: []const u8) !void {
+    pub fn write_config(self: *Self, offset: u8, data: []const u8, io: std.Io) !void {
         return switch (self.*) {
-            inline else => |*device| try device.pci_core().write_config(offset, data),
+            inline else => |*device| try device.pci_core().write_config(offset, data, io),
         };
     }
 

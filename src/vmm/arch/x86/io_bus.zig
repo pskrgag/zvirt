@@ -323,7 +323,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                     const register = self.address_port.register;
                     const config_offset: u8 = @as(u8, register) << 2;
                     const reg_data = if (pci_bus_obj.device(self.address_port.device)) |dev|
-                        try dev.read_config(config_offset)
+                        try dev.read_config(config_offset, io)
                     else
                         0xFFFFFFFF;
 
@@ -337,7 +337,7 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                     const config_offset: u8 = (@as(u8, register) << 2) + data_start;
 
                     if (pci_bus_obj.device(self.address_port.device)) |dev| {
-                        try dev.write_config(config_offset, data);
+                        try dev.write_config(config_offset, data, io);
                     }
                 }
             } else {
