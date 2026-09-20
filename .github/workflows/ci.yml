@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Zig Compiler
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+
+      - name: Check Formatting
+        run: zig fmt --check build.zig src test_initfs
+
+      - name: Run Debug Tests
+        run: zig build test
+
+      - name: Run Tsan Tests
+        run: zig build test -Dtsan=true
+
+      - name: Run Release Tests
+        run: zig build test --release=fast
+
