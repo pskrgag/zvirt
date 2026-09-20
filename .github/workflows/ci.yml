@@ -19,6 +19,13 @@ jobs:
         with:
           version: 0.16.0
 
+      - name: Enable KVM access
+        run: |
+          ls -l /dev/kvm
+          test -c /dev/kvm
+          sudo chown "$(id -u):$(id -g)" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+
       - name: Check Formatting
         run: zig fmt --check build.zig src test_initfs
 
