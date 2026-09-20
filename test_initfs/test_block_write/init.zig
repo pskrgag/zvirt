@@ -32,7 +32,9 @@ fn write_pattern(file: std.Io.File, io: std.Io, seed: u64, size: u64) !void {
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
+    try std.Io.File.stdout().writeStreamingAll(io, "\nHELLO1\n");
     try mount_devtmpfs();
+    try std.Io.File.stdout().writeStreamingAll(io, "\nHELLO2\n");
 
     const disk_fd = try posix.openat(
         posix.AT.FDCWD,
@@ -40,13 +42,20 @@ pub fn main(init: std.process.Init) !void {
         .{ .ACCMODE = .RDWR, .CLOEXEC = true },
         0,
     );
+    try std.Io.File.stdout().writeStreamingAll(io, "\nHELLO3\n");
     const disk: std.Io.File = .{
         .handle = disk_fd,
         .flags = .{ .nonblocking = false },
     };
     defer disk.close(io);
 
+    try std.Io.File.stdout().writeStreamingAll(io, "\nHELLO4\n");
     try write_pattern(disk, io, write_seed, write_size);
 
+    try std.Io.File.stdout().writeStreamingAll(io, "\nHELLO5\n");
     try std.Io.File.stdout().writeStreamingAll(io, "\nEND\n");
+
+    // Writes to console are async. So it's not possible to guarantee that after exit(), these bytes
+    // would reach zvirt buffer.
+    while (true) {}
 }

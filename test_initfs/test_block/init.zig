@@ -122,4 +122,8 @@ pub fn main(init: std.process.Init) !void {
     try drain(output_fd);
 
     try std.Io.File.stdout().writeStreamingAll(io, "\nEND\n");
+
+    // Writes to console are async. So it's not possible to guarantee that after exit(), these bytes
+    // would reach zvirt buffer.
+    while (true) {}
 }

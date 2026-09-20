@@ -48,6 +48,7 @@ fn VirtioPci(comptime Device: type) type {
         queue_select: u16 = 0,
         queue_vectors: [virtio.MAX_QUEUES_SUPPORTED]Atomic(u32) = @splat(Atomic(u32).init(c.VIRTIO_MSI_NO_VECTOR)),
         vm: *Vm,
+        bar: u8,
 
         const Self = @This();
 
@@ -136,6 +137,7 @@ fn VirtioPci(comptime Device: type) type {
                 .pci = pci,
                 .allocator = alloc,
                 .vm = vm,
+                .bar = bar,
             };
 
             return self;
@@ -228,29 +230,38 @@ fn VirtioPci(comptime Device: type) type {
         pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
             if (self.device.event_source()) |event|
                 try vm.register_fd(event, id, .pci);
+
+            const bar = self.pci.bars[self.bar].?;
+
+            for (0..self.device.max_queues()) |queue_idx| {
+                const notifyfd = self.device.notifyfd_for_queue(queue_idx) catch @panic("should not happen");
+
+                try vm.register_ioevent(
+                    notifyfd,
+                    bar.base + 256,
+                    @sizeOf(u16),
+                    queue_idx,
+                );
+
+                try vm.register_fd(notifyfd.as_fd(), id, .pci);
+            }
         }
 
-        pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
-            if (fd != self.device.event_source())
-                return error.UnknownPciEvent;
-
-            // VirtioCore currently publishes async completions to queue 0.
+        fn handle_completion_event(self: *Self, io: std.Io) !void {
             if (try self.device.handle_completion_event(io))
                 try self.signal_queue(0, io);
         }
 
-        fn handle_notification_write(self: *Self, offset: usize, data: []const u8, io: std.Io) !void {
-            std.debug.assert(offset == 0);
-
-            if (data.len != 2)
+        pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+            // There only one queue in async mode
+            if (fd == self.device.event_source()) {
+                try self.handle_completion_event(io);
                 return;
+            }
 
-            const queue = std.mem.readInt(u16, data[0..2], .little);
-            const irq = try self.device.notify_queue(queue, self.vm, io);
-
-            if (irq) {
-                log.debug("Signaling MSIx for queue {}\n", .{queue});
-                try self.signal_queue(queue, io);
+            const result = try self.device.handle_notify(fd, self.vm, io);
+            if (result.proccessed) {
+                try self.signal_queue(result.queue, io);
             }
         }
 
@@ -280,7 +291,7 @@ fn VirtioPci(comptime Device: type) type {
             if (offset < 128) {
                 try self.handle_generic_cap_write(offset, data, io);
             } else if (offset >= 256 and offset < 356) {
-                try self.handle_notification_write(offset - 256, data, io);
+                // Do nothing here, since it should be handled by ioevent
             }
         }
     };
@@ -317,7 +328,7 @@ pub const VirtioPciDevice = union(enum) {
                 else
                     vm.config.smp;
 
-                var device = VirtioCore(Block).new(try Block.new(
+                var device = try VirtioCore(Block).new(try Block.new(
                     block.path,
                     num_queues,
                     block.async,

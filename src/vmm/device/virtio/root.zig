@@ -8,6 +8,7 @@ const GuestMemory = @import("../../memory.zig").GuestMemory;
 const Status = @import("common.zig").Status;
 const StatusBits = @import("common.zig").StatusBits;
 const Mutex = std.Io.Mutex;
+const EventFd = @import("utils").EventFd.EventFd;
 
 const log = std.log.scoped(.virtio);
 
@@ -36,6 +37,12 @@ const VirtQueueState = struct {
     lock: Mutex = .init,
     queue: VirtQueue = .{},
     alloc: std.heap.ArenaAllocator,
+    notifyfd: EventFd,
+};
+
+pub const NotifyResult = struct {
+    proccessed: bool,
+    queue: usize,
 };
 
 pub fn VirtioCore(comptime Device: type) type {
@@ -48,11 +55,34 @@ pub fn VirtioCore(comptime Device: type) type {
 
         const Self = @This();
 
-        pub fn new(device: Device, alloc: std.mem.Allocator) Self {
+        pub fn new(device: Device, alloc: std.mem.Allocator) !Self {
+            var state: [MAX_QUEUES_SUPPORTED]VirtQueueState = @splat(.{
+                .alloc = std.heap.ArenaAllocator.init(alloc),
+                .notifyfd = undefined,
+            });
+
+            var notifyfd_count: usize = 0;
+
+            errdefer for (state[0..notifyfd_count]) |*s| {
+                s.notifyfd.deinit();
+            };
+
+            while (notifyfd_count < device.max_queues()) {
+                state[notifyfd_count].notifyfd = try EventFd.new(0);
+                notifyfd_count += 1;
+            }
+
             return .{
                 .device = device,
-                .virt_queues = @splat(.{ .alloc = std.heap.ArenaAllocator.init(alloc) }),
+                .virt_queues = state,
             };
+        }
+
+        pub fn notifyfd_for_queue(self: *const Self, idx: usize) !*const EventFd {
+            if (idx >= self.device.max_queues())
+                return error.InvalidQueue;
+
+            return &self.virt_queues[idx].notifyfd;
         }
 
         pub fn get_queue_ready(self: *Self, idx: usize, io: std.Io) !u32 {
@@ -186,43 +216,38 @@ pub fn VirtioCore(comptime Device: type) type {
         }
 
         // Returns true if used queue was updated
-        pub fn notify_queue(self: *Self, idx: usize, vm: *Vm, io: std.Io) !bool {
-            if (idx < self.device.max_queues()) {
-                const state = &self.virt_queues[idx];
+        fn notify_queue(self: *Self, idx: usize, vm: *Vm, io: std.Io) !bool {
+            std.debug.assert(idx < self.device.max_queues());
 
-                try state.lock.lock(io);
-                defer state.lock.unlock(io);
+            const state = &self.virt_queues[idx];
 
-                var reqs = try state.queue.kick(
-                    vm.memory,
-                    state.alloc.allocator(),
-                );
-                defer _ = state.alloc.reset(.retain_capacity);
-                defer reqs.deinit(state.alloc.allocator());
+            var reqs = try state.queue.kick(
+                vm.memory,
+                state.alloc.allocator(),
+            );
+            defer _ = state.alloc.reset(.retain_capacity);
+            defer reqs.deinit(state.alloc.allocator());
 
-                self.device.proccess_requests(reqs.items, io) catch {
-                    @panic("todo");
-                };
+            self.device.proccess_requests(reqs.items, io) catch {
+                @panic("todo");
+            };
 
-                var completed: usize = 0;
+            var completed: usize = 0;
 
-                for (reqs.items) |req| {
-                    // Len == 0 means that request will be handled in async
-                    if (req.len != 0) {
-                        const res = state.queue.push_used(
-                            req.head,
-                            req.len,
-                        );
-                        std.debug.assert(res);
+            for (reqs.items) |req| {
+                // Len == 0 means that request will be handled in async
+                if (req.len != 0) {
+                    const res = state.queue.push_used(
+                        req.head,
+                        req.len,
+                    );
+                    std.debug.assert(res);
 
-                        completed += 1;
-                    }
+                    completed += 1;
                 }
-
-                return completed != 0;
             }
 
-            return false;
+            return completed != 0;
         }
 
         pub fn handle_completion_event(self: *Self, io: std.Io) !bool {
@@ -269,7 +294,27 @@ pub fn VirtioCore(comptime Device: type) type {
             return self.device.max_queues();
         }
 
+        pub fn handle_notify(self: *Self, fd: std.posix.fd_t, vm: *Vm, io: std.Io) !NotifyResult {
+            for (self.virt_queues[0..self.device.max_queues()], 0..) |*state, queue_idx| {
+                if (state.notifyfd.as_fd() == fd) {
+                    try state.lock.lock(io);
+                    defer state.lock.unlock(io);
+
+                    _ = try state.notifyfd.read();
+                    const proccessed = try self.notify_queue(queue_idx, vm, io);
+
+                    return .{ .proccessed = proccessed, .queue = queue_idx };
+                }
+            }
+
+            return error.InvalidNotify;
+        }
+
         pub fn deinit(self: *Self, io: std.Io) void {
+            for (self.virt_queues[0..self.device.max_queues()]) |*s| {
+                s.notifyfd.deinit();
+            }
+
             self.device.deinit(io);
 
             for (self.virt_queues) |state| {

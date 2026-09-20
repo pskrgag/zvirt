@@ -986,7 +986,7 @@ test "Virtio PCI IO read (sync)" {
     try test_virtio_read(true, false);
 }
 
-fn test_virtio_write(pci: bool, async: bool) !void {
+fn test_virtio_write(pci: bool, async: bool, smp: u8) !void {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
@@ -1025,6 +1025,7 @@ fn test_virtio_write(pci: bool, async: bool) !void {
         .initramfs = initrd_bytes,
         .block_device = .{ .path = disk_path, .async = async },
         .pci = pci,
+        .smp = smp,
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
@@ -1049,20 +1050,36 @@ fn test_virtio_write(pci: bool, async: bool) !void {
     try std.testing.expectEqualSlices(u8, &expected, &actual);
 }
 
-test "Virtio MMIO IO write (async)" {
-    try test_virtio_write(false, true);
+test "Virtio MMIO IO write (async+up)" {
+    try test_virtio_write(false, true, 1);
 }
 
-test "Virtio PCI IO write (async)" {
-    try test_virtio_write(true, true);
+test "Virtio PCI IO write (async+up)" {
+    try test_virtio_write(true, true, 1);
 }
 
-test "Virtio MMIO IO write (sync)" {
-    try test_virtio_write(false, false);
+test "Virtio MMIO IO write (async+smp)" {
+    try test_virtio_write(false, true, 8);
 }
 
-test "Virtio PCI IO write (sync)" {
-    try test_virtio_write(true, false);
+test "Virtio PCI IO write (async+smp)" {
+    try test_virtio_write(true, true, 8);
+}
+
+test "Virtio MMIO IO write (sync+up)" {
+    try test_virtio_write(false, false, 1);
+}
+
+test "Virtio PCI IO write (sync+up)" {
+    try test_virtio_write(true, false, 1);
+}
+
+test "Virtio MMIO IO write (sync+smp)" {
+    try test_virtio_write(false, false, 1);
+}
+
+test "Virtio PCI IO write (sync+smp)" {
+    try test_virtio_write(true, false, 1);
 }
 
 test "SMP works" {

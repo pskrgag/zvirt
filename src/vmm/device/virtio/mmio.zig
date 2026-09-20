@@ -55,7 +55,6 @@ pub fn VirtioMmio(comptime Device: type) type {
         irq_state: u32 = 0,
         mutex: Mutex = Mutex.init,
         irqfd: EventFd,
-        notifyfds: [MAX_QUEUES_SUPPORTED]EventFd = undefined,
 
         const Self = @This();
 
@@ -76,21 +75,8 @@ pub fn VirtioMmio(comptime Device: type) type {
 
             try vm.register_irq(&irqfd, irq);
 
-            var notifyfds: [MAX_QUEUES_SUPPORTED]EventFd = undefined;
-            var notifyfd_count: usize = 0;
-
-            errdefer for (notifyfds[0..notifyfd_count]) |*notifyfd| {
-                notifyfd.deinit();
-            };
-
-            while (notifyfd_count < device.max_queues()) {
-                notifyfds[notifyfd_count] = try EventFd.new(0);
-                notifyfd_count += 1;
-            }
-
             return .{
                 .irqfd = irqfd,
-                .notifyfds = notifyfds,
                 .base = base,
                 .irq = irq,
                 .device = device,
@@ -174,9 +160,9 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .QueueAvailHigh => try self.device.set_queue_avail_high(self.queue_sel, data, io),
                     .QueueUsedLow => try self.device.set_queue_used_low(self.queue_sel, data, io),
                     .QueueUsedHigh => try self.device.set_queue_used_high(self.queue_sel, data, io),
-                    .QueueNotify => try self.notify_queue(data, io),
                     .DriverFeatures => self.device.update_driver_feats(data, self.driver_sel),
                     .QueueSel => self.queue_sel = data,
+                    else => unreachable,
                 }
             } else if (reg_raw >= 0x100) {
                 @panic("todo");
@@ -199,9 +185,11 @@ pub fn VirtioMmio(comptime Device: type) type {
             if (self.device.event_source()) |event|
                 try vm.register_fd(event, id, .virtio);
 
-            for (self.notifyfds[0..self.device.max_queues()], 0..) |notifyfd, queue_idx| {
+            for (0..self.device.max_queues()) |queue_idx| {
+                const notifyfd = self.device.notifyfd_for_queue(queue_idx) catch @panic("should not happen");
+
                 try vm.register_ioevent(
-                    &notifyfd,
+                    notifyfd,
                     self.base + @intFromEnum(MmioRegister.QueueNotify),
                     @sizeOf(u32),
                     queue_idx,
@@ -211,40 +199,28 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        fn notify_queue(self: *Self, idx: usize, io: std.Io) !void {
-            const processed = try self.device.notify_queue(idx, self.vm, io);
+        pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+            {
+                try self.mutex.lock(io);
+                defer self.mutex.unlock(io);
 
-            if (processed) {
+                if (fd == self.device.event_source()) {
+                    try self.handle_completion_event(io);
+                    return;
+                }
+            }
+
+            const res = try self.device.handle_notify(fd, self.vm, io);
+            if (res.proccessed) {
+                try self.mutex.lock(io);
+                defer self.mutex.unlock(io);
+
                 self.irq_state |= VIRTIO_IRQ_USED_RING;
                 try self.irqfd.notify();
             }
         }
 
-        pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
-            try self.mutex.lock(io);
-            defer self.mutex.unlock(io);
-
-            if (fd == self.device.event_source()) {
-                try self.handle_completion_event(io);
-                return;
-            }
-
-            for (self.notifyfds[0..self.device.max_queues()], 0..) |notifyfd, queue_idx| {
-                if (notifyfd.as_fd() == fd) {
-                    _ = try notifyfd.read();
-                    _ = try self.notify_queue(queue_idx, io);
-                    return;
-                }
-            }
-
-            return error.UnknownNotifyEvent;
-        }
-
         pub fn deinit(self: *Self, io: std.Io) void {
-            for (self.notifyfds[0..self.device.max_queues()]) |*notifyfd| {
-                notifyfd.deinit();
-            }
-
             self.irqfd.deinit();
             self.device.deinit(io);
         }
@@ -276,7 +252,7 @@ pub const VirtioMmioDevice = union(enum) {
 
                 break :blk try VirtioMmio(Block).new(
                     base_address,
-                    VirtioCore(Block).new(try Block.new(block.path, num_queues, block.async, io), alloc),
+                    try VirtioCore(Block).new(try Block.new(block.path, num_queues, block.async, io), alloc),
                     vm,
                     irq_num,
                 );
