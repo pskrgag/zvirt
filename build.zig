@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const profile = b.option(bool, "profile", "Preserve frame pointers for perf profiling") orelse false;
+    const tsan = b.option(bool, "tsan", "Enable ThreadSanitizer for tests only") orelse false;
     const test_filters = b.option(
         []const []const u8,
         "test-filter",
@@ -138,23 +139,71 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    // Keep sanitizer settings separate from the executable's module graph.
+    const test_utils_mod = b.createModule(.{
+        .root_source_file = b.path("src/utils/root.zig"),
+        .target = target,
+        .sanitize_thread = tsan,
+    });
+    const test_helpers_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_utils/root.zig"),
+        .target = target,
+        .sanitize_thread = tsan,
+    });
+    const test_kvm_mod = b.createModule(.{
+        .root_source_file = b.path("src/kvm/root.zig"),
+        .target = target,
+        .link_libc = true,
+        .sanitize_thread = tsan,
+        .imports = &.{
+            .{ .name = "test_utils", .module = test_helpers_mod },
+            .{ .name = "utils", .module = test_utils_mod },
+        },
+    });
+    const test_vmm_mod = b.createModule(.{
+        .root_source_file = b.path("src/vmm/root.zig"),
+        .target = target,
+        .sanitize_thread = tsan,
+        .imports = &.{
+            .{ .name = "kvm", .module = test_kvm_mod },
+            .{ .name = "utils", .module = test_utils_mod },
+            .{ .name = "test_utils", .module = test_helpers_mod },
+        },
+    });
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .sanitize_thread = tsan,
+        .imports = &.{.{ .name = "vmm", .module = test_vmm_mod }},
+    });
+    const test_main_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .sanitize_thread = tsan,
+        .imports = &.{
+            .{ .name = "zvirt", .module = test_mod },
+            .{ .name = "cli", .module = cli.module("cli") },
+        },
+    });
+
     const mod_tests = b.addTest(.{
-        .root_module = mod,
+        .root_module = if (tsan) test_mod else mod,
         .filters = test_filters,
     });
 
     const util_tests = b.addTest(.{
-        .root_module = utils,
+        .root_module = if (tsan) test_utils_mod else utils,
         .filters = test_filters,
     });
 
     const test_util_tests = b.addTest(.{
-        .root_module = test_utils,
+        .root_module = if (tsan) test_helpers_mod else test_utils,
         .filters = test_filters,
     });
 
     const vmm_tests = b.addTest(.{
-        .root_module = vmm,
+        .root_module = if (tsan) test_vmm_mod else vmm,
         .filters = test_filters,
     });
 
@@ -167,12 +216,18 @@ pub fn build(b: *std.Build) void {
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
+        .root_module = if (tsan) test_main_mod else exe.root_module,
         .filters = test_filters,
     });
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
+
+    if (tsan) {
+        for ([_]*std.Build.Step.Compile{ mod_tests, util_tests, test_util_tests, vmm_tests, exe_tests }) |tests| {
+            tests.use_llvm = true;
+        }
+    }
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will

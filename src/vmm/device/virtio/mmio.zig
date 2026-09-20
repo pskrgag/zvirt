@@ -162,7 +162,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .QueueUsedHigh => try self.device.set_queue_used_high(self.queue_sel, data, io),
                     .DriverFeatures => self.device.update_driver_feats(data, self.driver_sel),
                     .QueueSel => self.queue_sel = data,
-                    else => unreachable,
+                    else => {},
                 }
             } else if (reg_raw >= 0x100) {
                 @panic("todo");
