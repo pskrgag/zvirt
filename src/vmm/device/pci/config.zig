@@ -177,7 +177,6 @@ pub const PciConfigSpace = struct {
                 self.regs[i] = other_bits | bits_to_write;
             }
         }
-
     }
 
     pub fn write(
