@@ -202,20 +202,28 @@ pub const PciBus = struct {
 
     const Self = @This();
 
-    pub fn new(bridge: PciBridge, config: *const VmConfig) Self {
+    pub fn new(bridge: PciBridge, config: *const VmConfig, alloc: std.mem.Allocator) !*Self {
+        const self = try alloc.create(Self);
+
         var devs: [MAX_DEVICES]?PciDevice = @splat(null);
         const pci_range = arch.layout.pci_range(config);
         const allocator = BarAllocator.new(pci_range.start, pci_range.length);
 
         devs[0] = PciDevice{ .Brigde = bridge };
-        return .{ .devices = devs, .allocator = allocator };
+        self.* = .{ .devices = devs, .allocator = allocator };
+
+        return self;
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         for (&self.devices) |*slot| {
-            if (slot.*) |*dev| dev.deinit(alloc, io);
+            if (slot.*) |*dev|
+                dev.deinit(alloc, io);
+
             slot.* = null;
         }
+
+        alloc.destroy(self);
     }
 
     // Takes ownership on success. Thread unsafe (yet?)

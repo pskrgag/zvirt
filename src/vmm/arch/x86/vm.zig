@@ -83,7 +83,7 @@ pub const ArchVm = struct {
 
     const Self = @This();
 
-    pub fn new(config: *const VmConfig, alloc: Allocator) !Self {
+    pub fn new(config: *const VmConfig, alloc: Allocator, io: std.Io) !Self {
         var idalloc = IrqAllocator{};
 
         // Reserve IRQ for com1
@@ -98,7 +98,7 @@ pub const ArchVm = struct {
         // Reserve IRQ for PIC cascade
         _ = idalloc.allocate_specific(2).?;
 
-        return .{ .device_bus = try DeviceBus.new(config, alloc), .irqs = idalloc };
+        return .{ .device_bus = try DeviceBus.new(config, alloc, io), .irqs = idalloc };
     }
 
     pub fn setup_vm(

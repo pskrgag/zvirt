@@ -151,7 +151,7 @@ pub const Vcpu = struct {
     }
 
     pub fn immediate_exit(self: *Self) void {
-        self.run.immediate_exit = 1;
+        @atomicStore(u8, &self.run.immediate_exit, 1, .monotonic);
     }
 
     pub fn run_once(self: *const Self, result: ?IoResult) !void {

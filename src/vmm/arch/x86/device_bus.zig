@@ -57,10 +57,13 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     return self.mmio_bus.handle_mmio(mmio_request, io);
 }
 
-pub fn new(config: *const VmConfig, alloc: std.mem.Allocator) !Self {
+pub fn new(config: *const VmConfig, alloc: std.mem.Allocator, io: std.Io) !Self {
+    var mmio_bus = try mmio_bus_struct.new(alloc);
+    errdefer mmio_bus.deinit(alloc, io);
+
     return .{
-        .mmio_bus = try mmio_bus_struct.new(alloc),
-        .io_bus = io_bus_struct.new(config),
+        .mmio_bus = mmio_bus,
+        .io_bus = try io_bus_struct.new(config, alloc),
     };
 }
 

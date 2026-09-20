@@ -117,7 +117,7 @@ pub const Vm = struct {
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
 
-        var archvm = try arch.ArchVm.new(&config, allocator);
+        var archvm = try arch.ArchVm.new(&config, allocator, io);
         var archvm_cleanup = &archvm;
         errdefer archvm_cleanup.deinit(allocator, io);
 
@@ -530,14 +530,15 @@ test "guest port write reaches COM1 UART" {
         .unlimited,
     );
     defer allocator.free(binary_bytes);
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+
     var vm = try Vm.new(.{
         .ram_size = 0x20000,
         .binary = binary_bytes,
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
-    var uart_output = try test_utils.TmpUartOutput.create();
-    defer uart_output.deinit();
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
@@ -569,14 +570,14 @@ test "linux reaches shutdown" {
     );
     defer allocator.free(binary_bytes);
 
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+
     var vm = try Vm.new(.{
         .ram_size = 1 << 30,
         .binary = binary_bytes,
     }, io, allocator);
     defer vm.deinit(allocator, io);
-
-    var uart_output = try test_utils.TmpUartOutput.create();
-    defer uart_output.deinit();
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
@@ -718,13 +719,6 @@ test "linux login and reboot" {
     );
     defer allocator.free(initrd_bytes);
 
-    var vm = try Vm.new(.{
-        .ram_size = 1 << 30,
-        .binary = binary_bytes,
-        .initramfs = initrd_bytes,
-    }, io, allocator);
-    defer vm.deinit(allocator, io);
-
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
 
@@ -746,6 +740,13 @@ test "linux login and reboot" {
         .flags = .{ .nonblocking = false },
     };
     defer input_writer.close(io);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
 
     try vm.attach_console(.{
         .index = 0,
@@ -795,17 +796,6 @@ test "vCPU handles unknown exit reason gracefully" {
     );
     defer allocator.free(initrd_bytes);
 
-    var vm = try Vm.new(.{
-        .ram_size = 1 << 30,
-        .binary = binary_bytes,
-        .initramfs = initrd_bytes,
-
-        // use panic=default. In such case kernel will try to use BIOS reset vector, which is
-        // unmapped. This access will lead to KVM_INTERNALL_ERROR. VMM must handle it gracefully.
-        .cmdline = "panic=default pci=off",
-    }, io, allocator);
-    defer vm.deinit(allocator, io);
-
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
 
@@ -827,6 +817,17 @@ test "vCPU handles unknown exit reason gracefully" {
         .flags = .{ .nonblocking = false },
     };
     defer input_writer.close(io);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+
+        // use panic=default. In such case kernel will try to use BIOS reset vector, which is
+        // unmapped. This access will lead to KVM_INTERNALL_ERROR. VMM must handle it gracefully.
+        .cmdline = "panic=default pci=off",
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
 
     try vm.attach_console(.{
         .index = 0,
@@ -876,15 +877,15 @@ test "linux reaches console" {
     );
     defer allocator.free(initrd_bytes);
 
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+
     var vm = try Vm.new(.{
         .ram_size = 1 << 30,
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
     }, io, allocator);
     defer vm.deinit(allocator, io);
-
-    var uart_output = try test_utils.TmpUartOutput.create();
-    defer uart_output.deinit();
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
@@ -931,15 +932,6 @@ fn test_virtio_read(pci: bool, async: bool) !void {
     const disk_path = try disk.path(allocator);
     defer allocator.free(disk_path);
 
-    var vm = try Vm.new(.{
-        .ram_size = 1 << 30,
-        .binary = binary_bytes,
-        .initramfs = initrd_bytes,
-        .block_device = .{ .path = disk_path, .async = async },
-        .pci = pci,
-    }, io, allocator);
-    defer vm.deinit(allocator, io);
-
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
 
@@ -949,6 +941,15 @@ fn test_virtio_read(pci: bool, async: bool) !void {
 
     var initrd_stdout = try test_utils.TmpUartOutput.create();
     defer initrd_stdout.deinit();
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+        .block_device = .{ .path = disk_path, .async = async },
+        .pci = pci,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
 
     try vm.attach_console(.{
         .index = 0,
@@ -1019,6 +1020,10 @@ fn test_virtio_write(pci: bool, async: bool, smp: u8) !void {
     const disk_path = try disk.path(allocator);
     defer allocator.free(disk_path);
 
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+    errdefer dump_whole_file(&uart_output) catch {};
+
     var vm = try Vm.new(.{
         .ram_size = 1 << 30,
         .binary = binary_bytes,
@@ -1028,10 +1033,6 @@ fn test_virtio_write(pci: bool, async: bool, smp: u8) !void {
         .smp = smp,
     }, io, allocator);
     defer vm.deinit(allocator, io);
-
-    var uart_output = try test_utils.TmpUartOutput.create();
-    defer uart_output.deinit();
-    errdefer dump_whole_file(&uart_output) catch {};
 
     try vm.attach_console(.{
         .index = 0,
@@ -1109,15 +1110,6 @@ test "SMP works" {
     );
     defer allocator.free(initrd_bytes);
 
-    var vm = try Vm.new(.{
-        .ram_size = 1 << 30,
-        .binary = binary_bytes,
-        .initramfs = initrd_bytes,
-        .cmdline = "panic=default pci=off",
-        .smp = 16,
-    }, io, allocator);
-    defer vm.deinit(allocator, io);
-
     var uart_output = try test_utils.TmpUartOutput.create();
     defer uart_output.deinit();
 
@@ -1139,6 +1131,15 @@ test "SMP works" {
         .flags = .{ .nonblocking = false },
     };
     defer input_writer.close(io);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+        .cmdline = "panic=default pci=off",
+        .smp = 16,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
 
     try vm.attach_console(.{
         .index = 0,

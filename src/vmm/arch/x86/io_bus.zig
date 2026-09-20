@@ -14,6 +14,7 @@ const PciBus = pci.PciBus;
 const PciBridge = pci.PciBus;
 const PciAddress = pci.PciAddress;
 const PciDevice = @import("../../device/pci/root.zig").PciDevice;
+const Atomic = std.atomic.Value;
 
 const log = std.log.scoped(.io_bus);
 
@@ -35,9 +36,10 @@ com_mutex: [MAX_COMS]Mutex = @splat(Mutex.init),
 com: [MAX_COMS]?device.uart_16550.Uart = @splat(null),
 orig_tcattr: [MAX_COMS]?posix.termios = @splat(null),
 
-pci_bus_obj: ?PciBus = null,
+pci_bus_obj: ?*PciBus = null,
 cmos: device.cmos.Cmos = .{},
-address_port: AddressPort = std.mem.zeroes(AddressPort),
+cmos_lock: Mutex = .init,
+address_port: Atomic(AddressPort) = .init(std.mem.zeroes(AddressPort)),
 
 fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
     const original = try posix.tcgetattr(fd);
@@ -63,7 +65,7 @@ fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
 }
 
 pub fn pci_bus(self: *Self) ?*PciBus {
-    if (self.pci_bus_obj) |*obj| {
+    if (self.pci_bus_obj) |obj| {
         return obj;
     } else {
         return null;
@@ -103,17 +105,17 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
     }
 }
 
-pub fn new(config: *const VmConfig) Self {
+pub fn new(config: *const VmConfig, alloc: std.mem.Allocator) !Self {
     var self = Self{};
 
     if (config.pci)
-        self.pci_bus_obj = PciBus.new(pci.PciBridge.new(), config);
+        self.pci_bus_obj = try PciBus.new(pci.PciBridge.new(), config, alloc);
 
     return self;
 }
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
-    if (self.pci_bus_obj) |*bus|
+    if (self.pci_bus_obj) |bus|
         bus.deinit(alloc, io);
 
     // unwrap here, since if self.original exists, then com1 must also exist
@@ -154,14 +156,16 @@ fn handle_com(
 
     const data = data_ptr[0..data_len];
 
+    std.debug.assert(idx < self.com.len);
+
     if (io_request.size != 1)
         return error.InvalidWrite;
 
-    if (self.com[idx] == null)
-        return;
-
     try self.com_mutex[idx].lock(io);
     defer self.com_mutex[idx].unlock(io);
+
+    if (self.com[idx] == null)
+        return;
 
     if (self.com[idx]) |*com| {
         if (io_request.dir == .Out) {
@@ -237,6 +241,9 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
             if (io_request.size != 1)
                 return error.InvalidWrite;
 
+            try self.cmos_lock.lock(io);
+            defer self.cmos_lock.unlock(io);
+
             if (io_request.dir == .Out) {
                 try self.cmos.write_reg(
                     std.enums.fromInt(device.cmos.Register, io_request.port - 0x70).?,
@@ -268,9 +275,9 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                 }
 
                 if (io_request.dir == .Out) {
-                    self.address_port = @bitCast(std.mem.readInt(u32, data_ptr[0..4], .little));
+                    self.address_port.store(@bitCast(std.mem.readInt(u32, data_ptr[0..4], .little)), .monotonic);
                 } else {
-                    std.mem.writeInt(u32, data_ptr[0..4], @bitCast(self.address_port), .little);
+                    std.mem.writeInt(u32, data_ptr[0..4], @bitCast(self.address_port.load(.monotonic)), .little);
                 }
             }
 
@@ -289,9 +296,14 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                 return error.InvalidWrite;
 
             if (io_request.dir == .Out) {
-                self.address_port.enable = @intCast(std.mem.readInt(u8, data_ptr[0..1], .native) >> 7);
+                var ap = self.address_port.load(.monotonic);
+
+                ap.enable = @intCast(std.mem.readInt(u8, data_ptr[0..1], .native) >> 7);
+                self.address_port.store(ap, .monotonic);
             } else {
-                std.mem.writeInt(u8, data_ptr[0..1], @as(u8, self.address_port.enable) << 7, .little);
+                const ap = self.address_port.load(.monotonic);
+
+                std.mem.writeInt(u8, data_ptr[0..1], @as(u8, ap.enable) << 7, .little);
             }
 
             return false;
@@ -312,17 +324,19 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
         // I don't want to move this shit into PCI level, so PCI always returns u32 and then io_bus
         // returns needed part of the byte
         0xcfc...0xcff => {
-            if (self.pci_bus_obj) |*pci_bus_obj| {
+            if (self.pci_bus_obj) |pci_bus_obj| {
                 const data_start: u8 = @intCast(io_request.port - 0xcfc);
                 const data_end: u8 = data_start + io_request.size;
 
                 if (data_start + io_request.size > 4)
                     return error.InvalidWrite;
 
+                const ap = self.address_port.load(.monotonic);
+
                 if (io_request.dir == .In) {
-                    const register = self.address_port.register;
+                    const register = ap.register;
                     const config_offset: u8 = @as(u8, register) << 2;
-                    const reg_data = if (pci_bus_obj.device(self.address_port.device)) |dev|
+                    const reg_data = if (pci_bus_obj.device(ap.device)) |dev|
                         try dev.read_config(config_offset, io)
                     else
                         0xFFFFFFFF;
@@ -333,10 +347,10 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                         data_ptr[i] = @truncate(reg_data >> shift);
                     }
                 } else {
-                    const register = self.address_port.register;
+                    const register = ap.register;
                     const config_offset: u8 = (@as(u8, register) << 2) + data_start;
 
-                    if (pci_bus_obj.device(self.address_port.device)) |dev| {
+                    if (pci_bus_obj.device(ap.device)) |dev| {
                         try dev.write_config(config_offset, data, io);
                     }
                 }

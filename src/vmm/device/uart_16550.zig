@@ -7,6 +7,7 @@ const File = std.Io.File;
 const Io = std.Io;
 const log = std.log.scoped(.uart_16550);
 const Vm = @import("../root.zig").Vm;
+const Mutex = std.Io.Mutex;
 
 pub const Register = enum(u16) {
     Zero = 0,
