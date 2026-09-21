@@ -34,11 +34,22 @@ pub const PciDeviceCore = struct {
     active_bars: u8 = 0,
     msix: ?*msix.Msix = null,
     bus: *PciBus,
+    vm: *Vm,
     mutex: std.Io.Mutex = .init,
 
     const Self = @This();
 
-    pub fn new_device(vendor_id: u16, device_id: u16, class: PciClass, subclass: u8, bus: *PciBus) Self {
+    pub fn new_device(
+        vendor_id: u16,
+        device_id: u16,
+        class: PciClass,
+        subclass: u8,
+        vm: *Vm,
+        bus: *PciBus,
+        alloc: std.mem.Allocator,
+    ) !*Self {
+        const self = try alloc.create(Self);
+
         const config = PciConfigSpace.new_type0(
             vendor_id,
             device_id,
@@ -46,10 +57,12 @@ pub const PciDeviceCore = struct {
             subclass,
         );
 
-        return .{
+        self.* = .{
+            .vm = vm,
             .config = config,
             .bus = bus,
         };
+        return self;
     }
 
     pub fn new_bridge(vendor_id: u16, device_id: u16, class: PciClass, subclass: u8, bus: *PciBus) Self {
@@ -63,6 +76,7 @@ pub const PciDeviceCore = struct {
         return .{
             .config = config,
             .bus = bus,
+            .vm = undefined,
         };
     }
 
@@ -71,8 +85,8 @@ pub const PciDeviceCore = struct {
         self.msix = try msix.Msix.new(self, irqs, alloc);
     }
 
-    pub fn signal_vector(self: *Self, vm: *Vm, vector: usize, io: std.Io) !void {
-        try self.msix.?.signal(self, vector, vm, io);
+    pub fn signal_vector(self: *Self, vector: usize, io: std.Io) !void {
+        try self.msix.?.signal(vector, io);
     }
 
     // Thread unsafe
@@ -141,6 +155,8 @@ pub const PciDeviceCore = struct {
     pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
         if (self.msix) |m|
             m.deinit(alloc);
+
+        alloc.destroy(self);
     }
 };
 

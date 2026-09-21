@@ -1076,11 +1076,11 @@ test "Virtio PCI IO write (sync+up)" {
 }
 
 test "Virtio MMIO IO write (sync+smp)" {
-    try test_virtio_write(false, false, 1);
+    try test_virtio_write(false, false, 8);
 }
 
 test "Virtio PCI IO write (sync+smp)" {
-    try test_virtio_write(true, false, 1);
+    try test_virtio_write(true, false, 8);
 }
 
 test "SMP works" {

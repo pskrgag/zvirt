@@ -14,11 +14,6 @@ const MessageControl = packed struct(u16) {
     msix_enalbe: u1 = 0,
 };
 
-const TableAddress = packed struct(u32) {
-    bar: u3,
-    offset: u29,
-};
-
 pub const TableEntry = packed struct {
     address_low: u32 = 0,
     address_high: u32 = 0,
@@ -32,49 +27,58 @@ const pci_msix_cap = packed struct {
     cap_vndr: u8 = 0x11,
     cap_next: u8 = 0,
     msg_control: MessageControl,
-    table: TableAddress,
-    pending_bit_array: TableAddress,
+    table: u32,
+    pending_bit_array: u32,
 };
 
 const TableCountType = @FieldType(MessageControl, "table_count");
 const MAX_IRQS = std.math.maxInt(TableCountType);
+
+fn pba_size(irqs: usize) !usize {
+    return (try std.math.divCeil(usize, irqs, 64)) * 8;
+}
 
 pub const Msix = struct {
     max_irqs: usize,
     table: [MAX_IRQS]TableEntry = @splat(.{}),
     cap: usize,
     mutex: std.Io.Mutex = .init,
-
+    pba: [pba_size(MAX_IRQS) catch @compileError("Fix constant")]u8 = @splat(0),
+    pci: *PciDeviceCore,
     const Self = @This();
 
-    pub fn new(core: *PciDeviceCore, max_irqs: usize, alloc: std.mem.Allocator) !*Self {
+    pub fn new(pci: *PciDeviceCore, max_irqs: usize, alloc: std.mem.Allocator) !*Self {
         const self = try alloc.create(Self);
         errdefer alloc.destroy(self);
 
         if (max_irqs > MAX_IRQS)
             return error.InvalidNumberOfIrqs;
 
-        const bar: u8 = try core.allocate_bar(.{
+        const bar: u8 = try pci.allocate_bar(.{
             .context = self,
             .read_fn = mmio_read,
             .write_fn = mmio_write,
         });
 
         const table_size = max_irqs * @sizeOf(TableEntry);
+
+        std.debug.assert(table_size % 8 == 0);
+
         const cap = pci_msix_cap{
             .msg_control = .{
                 .table_count = @as(TableCountType, @truncate(max_irqs)) - 1,
             },
-            .table = .{ .bar = @truncate(bar), .offset = 0 },
-            .pending_bit_array = .{ .bar = @truncate(bar), .offset = @truncate(table_size) },
+            .table = bar | 0,
+            .pending_bit_array = bar | @as(u32, @truncate(table_size)),
         };
 
         self.* = .{
             .max_irqs = max_irqs,
-            .cap = try core.config.add_capability(std.mem.asBytes(&cap)),
+            .cap = try pci.config.add_capability(std.mem.asBytes(&cap)),
+            .pci = pci,
         };
 
-        core.config.set_write_write_mask(u16, 3 << 14, self.cap + 2);
+        pci.config.set_write_write_mask(u16, 3 << 14, self.cap + 2);
         return self;
     }
 
@@ -86,26 +90,40 @@ pub const Msix = struct {
         return (control & (1 << 15)) != 0 and (control & (1 << 14)) == 0;
     }
 
-    pub fn signal(self: *Self, core: *PciDeviceCore, idx: usize, vm: *Vm, io: std.Io) !void {
+    fn signal_unsafe(self: *Self, idx: usize, lock: bool, io: std.Io) !bool {
         if (idx >= self.table.len)
             return error.OutOfBounds;
 
-        if (!self.is_enabled(core, io)) {
-            return;
-        }
-
         const entry = blk: {
-            try self.mutex.lock(io);
-            defer self.mutex.unlock(io);
+            if (lock) {
+                try self.mutex.lock(io);
+            }
+
+            defer {
+                if (lock) {
+                    self.mutex.unlock(io);
+                }
+            }
+
+            const entry = self.table[idx];
+
+            if (entry.vector & 1 != 0 or !self.is_enabled(self.pci, io)) {
+                const index = idx / 8;
+                const offset = idx % 8;
+
+                self.pba[index] |= @as(u8, 1) << @intCast(offset);
+                return false;
+            }
 
             break :blk self.table[idx];
         };
 
-        if (entry.vector & 1 != 0) {
-            return;
-        }
+        try self.pci.vm.msi_signal(entry.address_low, entry.address_high, entry.data);
+        return true;
+    }
 
-        try vm.msi_signal(entry.address_low, entry.address_high, entry.data);
+    pub fn signal(self: *Self, idx: usize, io: std.Io) !void {
+        _ = try self.signal_unsafe(idx, true, io);
     }
 
     fn handle_table_write(self: *Self, offset: usize, data: []const u8, io: std.Io) !void {
@@ -125,7 +143,19 @@ pub const Msix = struct {
             0 => self.table[idx].address_low = val,
             4 => self.table[idx].address_high = val,
             8 => self.table[idx].data = val,
-            12 => self.table[idx].vector = val,
+            12 => {
+                const pba_index = idx / 8;
+                const pba_offset = idx % 8;
+                const bit = @as(u8, 1) << @intCast(pba_offset);
+
+                self.table[idx].vector = val;
+
+                if (val & 1 == 0 and self.pba[pba_index] & bit != 0) {
+                    // Clear the bit only if it was signaled.
+                    if (try self.signal_unsafe(idx, false, io))
+                        self.pba[pba_index] &= ~bit;
+                }
+            },
             else => unreachable,
         }
     }
@@ -146,14 +176,24 @@ pub const Msix = struct {
     fn mmio_read(_self: *anyopaque, offset: usize, data: []u8, io: std.Io) !void {
         var self: *Self = @ptrCast(@alignCast(_self));
         const pba_offset = self.max_irqs * @sizeOf(TableEntry);
+        const pba_sz = pba_size(self.max_irqs) catch unreachable;
 
         std.debug.assert(data.len == 4);
         log.debug("read from 0x{x}, data {x}\n", .{ offset, data });
 
         const val = if (offset < pba_offset)
             try self.handle_table_read(offset, io)
-        else
-            @panic("todo");
+        else blk: {
+            try self.mutex.lock(io);
+            defer self.mutex.unlock(io);
+
+            const real_offset = offset - pba_offset;
+
+            if (real_offset + data.len > pba_sz)
+                return error.InvalidRead;
+
+            break :blk std.mem.readInt(u32, self.pba[real_offset..][0..4], .little);
+        };
 
         std.mem.writeInt(u32, data[0..4], val, .little);
     }
@@ -166,7 +206,7 @@ pub const Msix = struct {
         if (offset < pba_offset) {
             try self.handle_table_write(offset, data, io);
         } else {
-            @panic("todo");
+            // PBA is read-only
         }
     }
 
