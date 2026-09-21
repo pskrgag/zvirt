@@ -99,6 +99,10 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     switch (mmio_request.pa) {
         0xa0000...0xbffff,
         0xc0000...0xfffff,
+
+        // AMD FCH_PM_S5_RESET_STATUS. It holds last crash reason. Returning -1 means "unsupported"
+        // based on print_s5_reset_status_mmio()
+        0xfed803c0,
         => return IoResult{ .Mmio = .{ .data = 0xffffffffffffffff } },
         else => {
             const n = find_region(&self.ranges, mmio_request.pa);
