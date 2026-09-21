@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const profile = b.option(bool, "profile", "Preserve frame pointers for perf profiling") orelse false;
     const tsan = b.option(bool, "tsan", "Enable ThreadSanitizer for tests only") orelse false;
+    const ci = b.option(bool, "ci", "Use line-oriented CI test reporting") orelse false;
     const test_filters = b.option(
         []const []const u8,
         "test-filter",
@@ -207,10 +208,10 @@ pub fn build(b: *std.Build) void {
         .filters = test_filters,
     });
 
-    const run_mod_tests = b.addRunArtifact(mod_tests);
-    const run_util_tests = b.addRunArtifact(util_tests);
-    const run_test_util_tests = b.addRunArtifact(test_util_tests);
-    const run_vmm_tests = b.addRunArtifact(vmm_tests);
+    const run_mod_tests = test_run(b, mod_tests, ci);
+    const run_util_tests = test_run(b, util_tests, ci);
+    const run_test_util_tests = test_run(b, test_util_tests, ci);
+    const run_vmm_tests = test_run(b, vmm_tests, ci);
 
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
@@ -221,7 +222,14 @@ pub fn build(b: *std.Build) void {
     });
 
     // A run step that will run the second test executable.
-    const run_exe_tests = b.addRunArtifact(exe_tests);
+    const run_exe_tests = test_run(b, exe_tests, ci);
+
+    if (ci) {
+        run_test_util_tests.step.dependOn(&run_util_tests.step);
+        run_vmm_tests.step.dependOn(&run_test_util_tests.step);
+        run_mod_tests.step.dependOn(&run_vmm_tests.step);
+        run_exe_tests.step.dependOn(&run_mod_tests.step);
+    }
 
     if (tsan) {
         for ([_]*std.Build.Step.Compile{ mod_tests, util_tests, test_util_tests, vmm_tests, exe_tests }) |tests| {
@@ -250,4 +258,16 @@ pub fn build(b: *std.Build) void {
     //
     // Lastly, the Zig build system is relatively simple and self-contained,
     // and reading its source code will allow you to master it.
+}
+
+fn test_run(b: *std.Build, tests: *std.Build.Step.Compile, ci: bool) *std.Build.Step.Run {
+    if (ci) {
+        tests.test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple };
+    }
+
+    const run = b.addRunArtifact(tests);
+    if (ci) {
+        run.stdio = .inherit;
+    }
+    return run;
 }
