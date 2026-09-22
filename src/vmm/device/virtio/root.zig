@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Block = @import("block.zig").Block;
+const Net = @import("net.zig").Net;
 const VirtQueue = @import("queue.zig").VirtQueue;
 const Vm = @import("../../root.zig").Vm;
 const GuestMemory = @import("../../memory.zig").GuestMemory;
@@ -14,10 +15,15 @@ const log = std.log.scoped(.virtio);
 
 pub const VirtioDeviceType = enum(u32) {
     BlockDevice = Block.MMIO_TYPE,
+    NetDevice = Net.MMIO_TYPE,
 };
 
 pub const VirtioDeviceInit = union(VirtioDeviceType) {
     BlockDevice: struct { path: []const u8, async: bool },
+    NetDevice: struct {
+        mac: [6]u8,
+        iface: []const u8,
+    },
 };
 
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
@@ -286,8 +292,8 @@ pub fn VirtioCore(comptime Device: type) type {
             return self.device.read_config(offset);
         }
 
-        pub fn event_source(self: *const Self) ?std.posix.fd_t {
-            return self.device.event_source();
+        pub fn completion_event_source(self: *const Self) ?std.posix.fd_t {
+            return self.device.completion_event_source();
         }
 
         pub fn max_queues(self: *const Self) usize {

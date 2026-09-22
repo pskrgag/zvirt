@@ -41,7 +41,10 @@ pub fn handle_event(
         .virtio => try self.mmio_bus.handle_event(id, fd, io),
         .pci => {
             const bus = self.io_bus.pci_bus() orelse return error.UnknownPciDevice;
-            if (id >= bus.devices.len) return error.UnknownPciDevice;
+
+            if (id >= bus.devices.len)
+                return error.UnknownPciDevice;
+
             const dev = bus.device(id) orelse return error.UnknownPciDevice;
             try dev.handle_event(fd, io);
         },
@@ -76,12 +79,12 @@ pub fn setup_devices(
     io: std.Io,
 ) !void {
     if (config.block_device.path.len != 0) {
-        const base = layout.virtio_device(config, 0);
-        const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
-
-        errdefer irq_alloc.free(irq);
-
         if (!config.pci) {
+            const base = layout.virtio_device(config, 0);
+            const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
+
+            errdefer irq_alloc.free(irq);
+
             var dev = try VirtioMmioDevice.new(
                 base,
                 .{ .BlockDevice = .{
@@ -117,7 +120,27 @@ pub fn setup_devices(
                 if (pci_dev.bar_mmio(i)) |bar|
                     try self.mmio_bus.register_range(bar.base, bar.size, bar.dev);
             }
+
             try pci_dev.register_events(vm, 1);
         }
+    }
+
+    {
+        const base = layout.virtio_device(config, 1);
+        const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
+
+        errdefer irq_alloc.free(irq);
+
+        var dev = try VirtioMmioDevice.new(
+            base,
+            .{ .NetDevice = .{ .mac = [6]u8{ 10, 10, 10, 10, 10, 10 }, .iface = "net0" } },
+            vm,
+            @truncate(irq),
+            alloc,
+            io,
+        );
+        errdefer dev.deinit(io);
+
+        try self.mmio_bus.register_device(vm, dev);
     }
 }

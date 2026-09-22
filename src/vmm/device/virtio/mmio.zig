@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Block = @import("block.zig").Block;
+const Net = @import("net.zig").Net;
 const virtio = @import("root.zig");
 const VirtioCore = virtio.VirtioCore;
 const VirtioDeviceInit = virtio.VirtioDeviceInit;
@@ -182,7 +183,7 @@ pub fn VirtioMmio(comptime Device: type) type {
         }
 
         pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
-            if (self.device.event_source()) |event|
+            if (self.device.completion_event_source()) |event|
                 try vm.register_fd(event, id, .virtio);
 
             for (0..self.device.max_queues()) |queue_idx| {
@@ -201,10 +202,11 @@ pub fn VirtioMmio(comptime Device: type) type {
 
         pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
             {
-                try self.mutex.lock(io);
-                defer self.mutex.unlock(io);
+                if (fd == self.device.completion_event_source()) {
+                    // Don't take the mutex on hot path. Keep it under that if.
+                    try self.mutex.lock(io);
+                    defer self.mutex.unlock(io);
 
-                if (fd == self.device.event_source()) {
                     try self.handle_completion_event(io);
                     return;
                 }
@@ -229,6 +231,7 @@ pub fn VirtioMmio(comptime Device: type) type {
 
 pub const VirtioMmioDevice = union(enum) {
     block: VirtioMmio(Block),
+    net: VirtioMmio(Net),
 
     const Self = @This();
 
@@ -257,6 +260,12 @@ pub const VirtioMmioDevice = union(enum) {
                     irq_num,
                 );
             } },
+            .NetDevice => |net| .{ .net = try VirtioMmio(Net).new(
+                base_address,
+                try VirtioCore(Net).new(try Net.new(net.mac, net.iface), alloc),
+                vm,
+                irq_num,
+            ) },
         };
     }
 

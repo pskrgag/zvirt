@@ -83,7 +83,7 @@ pub const Block = struct {
         };
     }
 
-    pub fn event_source(self: *const Self) ?std.posix.fd_t {
+    pub fn completion_event_source(self: *const Self) ?std.posix.fd_t {
         return self.engine.event_source();
     }
 

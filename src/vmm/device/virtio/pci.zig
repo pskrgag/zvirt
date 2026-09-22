@@ -229,7 +229,7 @@ fn VirtioPci(comptime Device: type) type {
         }
 
         pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
-            if (self.device.event_source()) |event|
+            if (self.device.completion_event_source()) |event|
                 try vm.register_fd(event, id, .pci);
 
             const bar = self.pci.bars[self.bar].?;
@@ -249,13 +249,13 @@ fn VirtioPci(comptime Device: type) type {
         }
 
         fn handle_completion_event(self: *Self, io: std.Io) !void {
+            // There only one queue in async mode
             if (try self.device.handle_completion_event(io))
                 try self.signal_queue(0, io);
         }
 
         pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
-            // There only one queue in async mode
-            if (fd == self.device.event_source()) {
+            if (fd == self.device.completion_event_source()) {
                 try self.handle_completion_event(io);
                 return;
             }
@@ -339,6 +339,7 @@ pub const VirtioPciDevice = union(enum) {
 
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };
             },
+            else => @panic("todo"),
         };
     }
 
