@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
     const utils = b.addModule("utils", .{
         .root_source_file = b.path("src/utils/root.zig"),
         .target = target,
+        .link_libc = true,
     });
 
     const test_utils = b.addModule("test_utils", .{

@@ -125,7 +125,7 @@ pub fn setup_devices(
         }
     }
 
-    {
+    if (!config.pci) {
         const base = layout.virtio_device(config, 1);
         const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
 

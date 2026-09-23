@@ -48,7 +48,7 @@ pub fn VirtioMmio(comptime Device: type) type {
         // Assuming page size
         base: u64,
         irq: u32,
-        device: VirtioCore(Device),
+        device: Device,
         device_sel: bool = false,
         driver_sel: bool = false,
         queue_sel: u32 = 0,
@@ -60,16 +60,15 @@ pub fn VirtioMmio(comptime Device: type) type {
         const Self = @This();
 
         fn queue_num_max(self: *const Self) u32 {
-            return if (self.queue_sel < self.device.max_queues())
+            return if (self.queue_sel < self.device.core.max_queues())
                 MAX_QUEUE_ELEMENTS
             else
                 0;
         }
 
-        pub fn new(base: u64, device: VirtioCore(Device), vm: *Vm, irq: u32) !Self {
+        pub fn new(base: u64, device: Device, vm: *Vm, irq: u32) !Self {
             // TODO: replace all 4096 with arch page size
             std.debug.assert(std.mem.isAligned(base, 4096));
-            std.debug.assert(MAX_QUEUES_SUPPORTED >= device.max_queues());
 
             var irqfd = try EventFd.new(1);
             errdefer irqfd.deinit();
@@ -95,13 +94,13 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .Version => 0x2,
                     .DeviceType => Device.MMIO_TYPE,
                     .VendorId => 0x1AF4,
-                    .Status => self.device.status,
+                    .Status => self.device.core.status,
                     .QueueNumMax => self.queue_num_max(),
-                    .QueueReady => try self.device.get_queue_ready(self.queue_sel, io),
+                    .QueueReady => try self.device.core.get_queue_ready(self.queue_sel, io),
                     .DeviceFeatures => if (self.device_sel)
-                        @truncate(self.device.device_features >> 32)
+                        @truncate(self.device.core.device_features >> 32)
                     else
-                        @truncate(self.device.device_features),
+                        @truncate(self.device.core.device_features),
 
                     // Not sure if config will change. Keep as 0 for now
                     .ConfigGeneration => 0,
@@ -147,21 +146,21 @@ pub fn VirtioMmio(comptime Device: type) type {
                     .InterruptStatus,
                     => {},
 
-                    .Status => self.device.status = @truncate(data),
+                    .Status => self.device.core.status = @truncate(data),
                     .InterruptAck => {
                         self.irq_state &= ~data;
                     },
                     .DeviceFeaturesSel => self.device_sel = data != 0,
                     .DriverFeaturesSel => self.driver_sel = data != 0,
-                    .QueueReady => try self.device.set_queue_ready(self.queue_sel, self.vm.memory, data, io),
-                    .QueueNum => try self.device.set_queue_num(self.queue_sel, data, io),
-                    .QueueDescLow => try self.device.set_queue_desc_low(self.queue_sel, data, io),
-                    .QueueDescHigh => try self.device.set_queue_desc_high(self.queue_sel, data, io),
-                    .QueueAvailLow => try self.device.set_queue_avail_low(self.queue_sel, data, io),
-                    .QueueAvailHigh => try self.device.set_queue_avail_high(self.queue_sel, data, io),
-                    .QueueUsedLow => try self.device.set_queue_used_low(self.queue_sel, data, io),
-                    .QueueUsedHigh => try self.device.set_queue_used_high(self.queue_sel, data, io),
-                    .DriverFeatures => self.device.update_driver_feats(data, self.driver_sel),
+                    .QueueReady => try self.device.core.set_queue_ready(self.queue_sel, self.vm.memory, data, io),
+                    .QueueNum => try self.device.core.set_queue_num(self.queue_sel, data, io),
+                    .QueueDescLow => try self.device.core.set_queue_desc_low(self.queue_sel, data, io),
+                    .QueueDescHigh => try self.device.core.set_queue_desc_high(self.queue_sel, data, io),
+                    .QueueAvailLow => try self.device.core.set_queue_avail_low(self.queue_sel, data, io),
+                    .QueueAvailHigh => try self.device.core.set_queue_avail_high(self.queue_sel, data, io),
+                    .QueueUsedLow => try self.device.core.set_queue_used_low(self.queue_sel, data, io),
+                    .QueueUsedHigh => try self.device.core.set_queue_used_high(self.queue_sel, data, io),
+                    .DriverFeatures => self.device.core.update_driver_feats(data, self.driver_sel),
                     .QueueSel => self.queue_sel = data,
                     else => {},
                 }
@@ -186,8 +185,8 @@ pub fn VirtioMmio(comptime Device: type) type {
             if (self.device.completion_event_source()) |event|
                 try vm.register_fd(event, id, .virtio);
 
-            for (0..self.device.max_queues()) |queue_idx| {
-                const notifyfd = self.device.notifyfd_for_queue(queue_idx) catch @panic("should not happen");
+            for (0..self.device.core.max_queues()) |queue_idx| {
+                const notifyfd = self.device.core.notifyfd_for_queue(queue_idx) catch @panic("should not happen");
 
                 try vm.register_ioevent(
                     notifyfd,
@@ -255,14 +254,14 @@ pub const VirtioMmioDevice = union(enum) {
 
                 break :blk try VirtioMmio(Block).new(
                     base_address,
-                    try VirtioCore(Block).new(try Block.new(block.path, num_queues, block.async, io), alloc),
+                    try Block.new(block.path, num_queues, block.async, alloc, io),
                     vm,
                     irq_num,
                 );
             } },
             .NetDevice => |net| .{ .net = try VirtioMmio(Net).new(
                 base_address,
-                try VirtioCore(Net).new(try Net.new(net.mac, net.iface), alloc),
+                try Net.new(net.mac, net.iface, alloc),
                 vm,
                 irq_num,
             ) },

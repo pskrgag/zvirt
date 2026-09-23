@@ -3,6 +3,9 @@
 const std = @import("std");
 const queue = @import("queue.zig");
 const Tap = @import("utils").Tap;
+const VirtioCore = @import("root.zig").VirtioCore;
+const NotifyResult = @import("root.zig").NotifyResult;
+const Vm = @import("../../root.zig").Vm;
 
 pub const c = @cImport({
     @cInclude("linux/virtio_net.h");
@@ -18,6 +21,7 @@ pub const Net = struct {
 
     config: c.virtio_net_config,
     tap: Tap,
+    core: VirtioCore,
 
     pub const MMIO_TYPE = 0x1;
 
@@ -27,13 +31,9 @@ pub const Net = struct {
         return VIRTIO_NET_F_MAC;
     }
 
-    pub fn max_queues(self: *const Self) u32 {
-        _ = self;
-        return 2;
-    }
-
-    pub fn new(mac: [6]u8, iface: []const u8) !Self {
-        const tap = try Tap.new(iface);
+    pub fn new(mac: [6]u8, iface: []const u8, alloc: std.mem.Allocator) !Self {
+        var tap = try Tap.new(iface);
+        errdefer tap.deinit();
 
         var config: c.virtio_net_config = undefined;
 
@@ -43,7 +43,24 @@ pub const Net = struct {
         return .{
             .config = config,
             .tap = tap,
+            .core = try VirtioCore.new(Self.features(), 2, alloc),
         };
+    }
+
+    pub fn handle_completion_event(self: *Self, io: std.Io) !bool {
+        _ = self;
+        _ = io;
+
+        @panic("todo");
+    }
+
+    pub fn handle_notify(self: *Self, fd: std.posix.fd_t, vm: *Vm, io: std.Io) !NotifyResult {
+        _ = self;
+        _ = fd;
+        _ = vm;
+        _ = io;
+
+        @panic("todo");
     }
 
     pub fn completion_event_source(self: *const Self) ?std.posix.fd_t {
@@ -73,6 +90,7 @@ pub const Net = struct {
 
     pub fn deinit(self: *Self, io: std.Io) void {
         _ = io;
-        _ = self;
+        self.core.deinit();
+        self.tap.deinit();
     }
 };

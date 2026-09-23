@@ -6,6 +6,9 @@ const log = std.log.scoped(.virtio_blk);
 const FileEngine = @import("../../io/root.zig").FileEngine;
 const IdAllocator = @import("utils").IdAlloc.IdAllocator;
 const PciClass = @import("../pci/config.zig").PciClass;
+const VirtioCore = @import("root.zig").VirtioCore;
+const NotifyResult = @import("root.zig").NotifyResult;
+const Vm = @import("../../root.zig").Vm;
 
 pub const c = @cImport({
     @cInclude("linux/virtio_blk.h");
@@ -51,6 +54,7 @@ pub const Block = struct {
     config: c.virtio_blk_config,
     file: std.Io.File,
     engine: FileEngine,
+    core: VirtioCore,
 
     pub const MMIO_TYPE = 0x2;
 
@@ -60,7 +64,13 @@ pub const Block = struct {
 
     const Self = @This();
 
-    pub fn new(path: []const u8, num_queues: usize, async: bool, io: std.Io) !Self {
+    pub fn new(
+        path: []const u8,
+        num_queues: usize,
+        async: bool,
+        alloc: std.mem.Allocator,
+        io: std.Io,
+    ) !Self {
         var config = std.mem.zeroes(c.virtio_blk_config);
         var engine = if (async)
             try FileEngine.new_async(MAX_IN_FLIGHT_REQUESTS)
@@ -72,14 +82,17 @@ pub const Block = struct {
         var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
         errdefer file.close(io);
 
+        const queues = if (async) 1 else num_queues;
+
         const stat = try file.stat(io);
         config.capacity = stat.size / 512;
-        config.num_queues = @truncate(num_queues);
+        config.num_queues = @truncate(queues);
 
         return .{
             .config = config,
             .file = file,
             .engine = engine,
+            .core = try VirtioCore.new(Self.features(), queues, alloc),
         };
     }
 
@@ -88,12 +101,75 @@ pub const Block = struct {
     }
 
     pub fn deinit(self: *Self, io: std.Io) void {
+        self.core.deinit();
         self.engine.deinit();
         self.file.close(io);
     }
 
-    pub fn ack_event(self: *Self) !void {
+    pub fn handle_completion_event(self: *Self, io: std.Io) !bool {
         _ = try self.engine.ack_event();
+
+        // NOTE: support only one queue in async mode (do we need more? I don't think so)
+        std.debug.assert(self.max_queues() == 1);
+
+        var consumed = false;
+        var batch: usize = 0;
+
+        try self.core.virt_queues[0].lock.lock(io);
+        defer self.core.virt_queues[0].lock.unlock(io);
+
+        while (try self.pop_completion()) |async_result| {
+            const state = &self.core.virt_queues[0];
+
+            const res = state.queue.push_used(
+                async_result.head,
+                async_result.len,
+            );
+            std.debug.assert(res);
+
+            batch += 1;
+            consumed = true;
+        }
+
+        if (consumed) {
+            log.debug("batched {}\n", .{batch});
+        }
+
+        return consumed;
+    }
+
+    pub fn handle_notify(self: *Self, fd: std.posix.fd_t, vm: *Vm, io: std.Io) !NotifyResult {
+        const token = try self.core.notified_queue(fd, io);
+        defer self.core.unlock_queue(token, io);
+
+        var reqs = try token.state.queue.kick(
+            vm.memory,
+            token.state.alloc.allocator(),
+        );
+
+        defer _ = token.state.alloc.reset(.retain_capacity);
+        defer reqs.deinit(token.state.alloc.allocator());
+
+        self.proccess_requests(reqs.items, io) catch {
+            @panic("todo");
+        };
+
+        var completed: usize = 0;
+
+        for (reqs.items) |req| {
+            // Len == 0 means that request will be handled in async
+            if (req.len != 0) {
+                const res = token.state.queue.push_used(
+                    req.head,
+                    req.len,
+                );
+                std.debug.assert(res);
+
+                completed += 1;
+            }
+        }
+
+        return .{ .queue = token.idx, .proccessed = completed != 0 };
     }
 
     pub fn pop_completion(self: *Self) !?Completion {

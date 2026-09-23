@@ -170,6 +170,7 @@ pub fn register_device(self: *Self, vm: *Vm, dev: VirtioMmioDevice) !void {
 
     try dev.register_events(vm, @truncate(id));
     self.virtio_devs.appendAssumeCapacity(dev);
+
     const stored_dev = &self.virtio_devs.items[id];
     try self.register_range(stored_dev.base(), 4096, stored_dev.mmio_device());
     // TODO: unregister in case of an error
