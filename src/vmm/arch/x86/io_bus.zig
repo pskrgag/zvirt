@@ -98,7 +98,7 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
     try self.com[index].?.init(vm);
 
     if (console.input) |in|
-        try vm.register_fd(in.handle, @intCast(index), .io_bus);
+        try vm.register_fd(in.handle, @intCast(index), .io_bus, false);
 
     if (console.configure_terminal) {
         try self.setup_terminal(console.output.handle, index);

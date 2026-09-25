@@ -41,8 +41,8 @@ pub const Tap = struct {
         }
 
         const setfl = linux.fcntl(fd, c.F_SETFL, flags | c.O_NONBLOCK);
-        if (linux.errno(setfl ) != .SUCCESS) {
-            log.err("Failed to get file flags: {}\n", .{linux.errno(setfl )});
+        if (linux.errno(setfl) != .SUCCESS) {
+            log.err("Failed to get file flags: {}\n", .{linux.errno(setfl)});
             return error.F_SETFL;
         }
 
@@ -60,6 +60,25 @@ pub const Tap = struct {
         }
 
         return .{ .fd = fd };
+    }
+
+    pub fn readv(self: *Self, iovecs: anytype) !usize {
+        const res = linux.readv(self.fd, iovecs.ptr, iovecs.len);
+
+        return switch (linux.errno(res)) {
+            .SUCCESS => res,
+            .AGAIN => 0,
+            else => error.Failed,
+        };
+    }
+
+    pub fn writev(self: *Self, iovecs: anytype) !usize {
+        const res = linux.writev(self.fd, iovecs.ptr, iovecs.len);
+
+        return switch (linux.errno(res)) {
+            .SUCCESS => res,
+            else => error.Failed,
+        };
     }
 
     pub fn read(self: *Self, data: []u8) !usize {

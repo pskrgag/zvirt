@@ -96,8 +96,8 @@ pub const Block = struct {
         };
     }
 
-    pub fn completion_event_source(self: *const Self) ?std.posix.fd_t {
-        return self.engine.event_source();
+    pub fn completion_event_source(self: *const Self) ?struct { fd: std.posix.fd_t, edge: bool } {
+        return .{ .fd = self.engine.event_source() orelse return null, .edge = false };
     }
 
     pub fn deinit(self: *Self, io: std.Io) void {
@@ -172,7 +172,7 @@ pub const Block = struct {
         return .{ .queue = token.idx, .proccessed = completed != 0 };
     }
 
-    pub fn pop_completion(self: *Self) !?Completion {
+    fn pop_completion(self: *Self) !?Completion {
         const comp = (try self.engine.pop_completion(u64)) orelse return null;
 
         const token: Token = @bitCast(comp.token);

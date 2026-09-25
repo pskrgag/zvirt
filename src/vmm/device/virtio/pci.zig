@@ -230,7 +230,7 @@ fn VirtioPci(comptime Device: type) type {
 
         pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
             if (self.device.completion_event_source()) |event|
-                try vm.register_fd(event, id, .pci);
+                try vm.register_fd(event.fd, id, .pci, event.edge);
 
             const bar = self.pci.bars[self.bar].?;
 
@@ -244,7 +244,7 @@ fn VirtioPci(comptime Device: type) type {
                     queue_idx,
                 );
 
-                try vm.register_fd(notifyfd.as_fd(), id, .pci);
+                try vm.register_fd(notifyfd.as_fd(), id, .pci, false);
             }
         }
 
@@ -255,9 +255,11 @@ fn VirtioPci(comptime Device: type) type {
         }
 
         pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
-            if (fd == self.device.completion_event_source()) {
-                try self.handle_completion_event(io);
-                return;
+            if (self.device.completion_event_source()) |comp_fd| {
+                if (comp_fd.fd == fd) {
+                    try self.handle_completion_event(io);
+                    return;
+                }
             }
 
             const result = try self.device.handle_notify(fd, self.pci.vm, io);

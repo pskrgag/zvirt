@@ -244,14 +244,15 @@ pub const Vm = struct {
         }
     }
 
-    pub fn register_fd(self: *Self, fd: posix.fd_t, id: u29, source: EventSource) !void {
+    pub fn register_fd(self: *Self, fd: posix.fd_t, id: u29, source: EventSource, edge: bool) !void {
         const token = EventToken{
             .id = id,
             .fd = fd,
             .source = source,
         };
+        const flags = linux.EPOLL.IN | if (edge) linux.EPOLL.ET else 0;
 
-        try self.epoll.add(fd, @bitCast(token));
+        try self.epoll.add_with_events(fd, flags, @bitCast(token));
     }
 
     pub fn run(self: *Self, alloc: std.mem.Allocator, io: std.Io) !void {
@@ -268,7 +269,7 @@ pub const Vm = struct {
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {
-                try self.register_fd(cpu.eventfd.fd, @truncate(idx), .vcpu);
+                try self.register_fd(cpu.eventfd.fd, @truncate(idx), .vcpu, false);
                 cpu.start(io);
             }
         }

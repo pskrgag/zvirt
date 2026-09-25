@@ -183,7 +183,7 @@ pub fn VirtioMmio(comptime Device: type) type {
 
         pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
             if (self.device.completion_event_source()) |event|
-                try vm.register_fd(event, id, .virtio);
+                try vm.register_fd(event.fd, id, .virtio, event.edge);
 
             for (0..self.device.core.max_queues()) |queue_idx| {
                 const notifyfd = self.device.core.notifyfd_for_queue(queue_idx) catch @panic("should not happen");
@@ -195,19 +195,21 @@ pub fn VirtioMmio(comptime Device: type) type {
                     queue_idx,
                 );
 
-                try vm.register_fd(notifyfd.as_fd(), id, .virtio);
+                try vm.register_fd(notifyfd.as_fd(), id, .virtio, false);
             }
         }
 
         pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
             {
-                if (fd == self.device.completion_event_source()) {
-                    // Don't take the mutex on hot path. Keep it under that if.
-                    try self.mutex.lock(io);
-                    defer self.mutex.unlock(io);
+                if (self.device.completion_event_source()) |comp_fd| {
+                    if (comp_fd.fd == fd) {
+                        // Don't take the mutex on hot path. Keep it under that if.
+                        try self.mutex.lock(io);
+                        defer self.mutex.unlock(io);
 
-                    try self.handle_completion_event(io);
-                    return;
+                        try self.handle_completion_event(io);
+                        return;
+                    }
                 }
             }
 

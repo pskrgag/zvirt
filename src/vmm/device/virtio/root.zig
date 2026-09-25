@@ -242,6 +242,13 @@ pub const VirtioCore = struct {
         }
     }
 
+    pub fn get_queue(self: *Self, idx: usize, io: std.Io) !VirtQueueToken {
+        const state = &self.virt_queues[idx];
+
+        try state.lock.lock(io);
+        return .{ .state = state, .idx = idx };
+    }
+
     pub fn unlock_queue(self: *Self, token: VirtQueueToken, io: std.Io) void {
         _ = self;
         token.state.lock.unlock(io);
@@ -251,7 +258,7 @@ pub const VirtioCore = struct {
         return self.queues;
     }
 
-    pub fn notified_queue(self: *Self, fd: std.posix.fd_t, io: std.Io) !VirtQueueToken  {
+    pub fn notified_queue(self: *Self, fd: std.posix.fd_t, io: std.Io) !VirtQueueToken {
         for (self.virt_queues[0..self.max_queues()], 0..) |*state, idx| {
             if (state.notifyfd.as_fd() == fd) {
                 _ = try state.notifyfd.read();
