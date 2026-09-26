@@ -33,7 +33,7 @@ jobs:
       - name: Install test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y just cpio
+          sudo apt-get install -y just cpio arping
 
       - name: Build test initrds
         run: just initrds
