@@ -173,9 +173,9 @@ pub fn VirtioMmio(comptime Device: type) type {
         }
 
         fn handle_completion_event(self: *Self, io: std.Io) !void {
-            const completed = try self.device.handle_completion_event(io);
+            const res = try self.device.handle_completion_event(io);
 
-            if (completed) {
+            if (res.proccessed) {
                 self.irq_state |= VIRTIO_IRQ_USED_RING;
                 try self.irqfd.notify();
             }

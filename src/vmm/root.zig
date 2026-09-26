@@ -62,6 +62,12 @@ pub const VmConfig = struct {
     // PCI support
     pci: bool = false,
 
+    // Network support
+    network: ?struct {
+        mac: utils.Mac,
+        iface: []const u8,
+    } = null,
+
     const Self = @This();
 
     fn verify(self: *const Self) !void {

@@ -2,6 +2,7 @@ const std = @import("std");
 const cli = @import("cli");
 const zvirt = @import("zvirt");
 const Vm = zvirt.vmm.Vm;
+const Mac = @import("utils").Mac;
 
 const log = std.log.scoped(.cli);
 
@@ -31,6 +32,7 @@ var config = struct {
     memory: []const u8 = "",
     initramfs: []const u8 = "",
     block_device: []const u8 = "",
+    net_device: []const u8 = "",
     cmdline: []const u8 = "",
     smp: []const u8 = "",
     enable_pci: bool = false,
@@ -69,6 +71,10 @@ pub fn main(init: std.process.Init) !void {
                 .help = "fs image",
                 .value_ref = runner.mkRef(&config.block_device),
             }, .{
+                .long_name = "net",
+                .help = "Network device (mac=aa:bb:cc:dd:ee:ff)",
+                .value_ref = runner.mkRef(&config.net_device),
+            }, .{
                 .long_name = "cmdline",
                 .help = "command line",
                 .value_ref = runner.mkRef(&config.cmdline),
@@ -106,15 +112,13 @@ fn parse_memory(memory: []const u8) !usize {
     };
 }
 
+// TODO: move it to own lib and unit test it
 fn parse_block_device(data: []const u8) !struct { path: []const u8, async: bool } {
     var parts = std.mem.splitScalar(u8, data, ',');
     var path: []const u8 = "";
     var async: ?bool = null;
 
-    std.debug.print("{s}\n", .{data});
-
     while (parts.next()) |part| {
-        std.debug.print("{s}\n", .{part});
         const del = std.mem.find(u8, part, "=") orelse return error.InvalidFormat;
         const key = part[0..del];
         const value = part[del + 1 ..];
@@ -141,6 +145,40 @@ fn parse_block_device(data: []const u8) !struct { path: []const u8, async: bool 
     }
 
     return .{ .path = path, .async = async orelse true };
+}
+
+fn parse_net_device(data: []const u8) !?struct { mac: Mac, iface: []const u8 } {
+    if (data.len == 0)
+        return null;
+
+    var parts = std.mem.splitScalar(u8, data, ',');
+    var mac: ?Mac = null;
+    var iface: ?[]const u8 = null;
+
+    while (parts.next()) |part| {
+        const del = std.mem.find(u8, part, "=") orelse return error.InvalidFormat;
+        const key = part[0..del];
+        const value = part[del + 1 ..];
+
+        if (std.mem.eql(u8, key, "mac")) {
+            if (mac != null)
+                return error.AlreadySet;
+
+            mac = try Mac.from_str(value);
+        } else if (std.mem.eql(u8, key, "iface")) {
+            if (iface != null)
+                return error.AlreadySet;
+
+            iface = value;
+        } else {
+            return error.InvalidKey;
+        }
+    }
+
+    return .{
+        .mac = mac orelse return error.MissingMac,
+        .iface = iface orelse return error.MissingIface,
+    };
 }
 
 fn run() !void {
@@ -185,12 +223,14 @@ fn run() !void {
     }
 
     const block = try parse_block_device(config.block_device);
+    const net = try parse_net_device(config.net_device);
 
     var vm = try Vm.new(.{
         .ram_size = memory_size,
         .binary = kernel_bytes,
         .initramfs = initramfs,
         .block_device = .{ .path = block.path, .async = block.async },
+        .network = if (net) |n| .{ .mac = n.mac, .iface = n.iface } else null,
         .cmdline = config.cmdline,
         .smp = smp,
         .pci = config.enable_pci,

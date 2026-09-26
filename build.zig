@@ -97,6 +97,7 @@ pub fn build(b: *std.Build) void {
                 // importing modules from different packages).
                 .{ .name = "zvirt", .module = mod },
                 .{ .name = "cli", .module = cli.module("cli") },
+                .{ .name = "utils", .module = utils },
             },
         }),
     });
@@ -186,6 +187,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "zvirt", .module = test_mod },
             .{ .name = "cli", .module = cli.module("cli") },
+            .{ .name = "utils", .module = test_utils_mod },
         },
     });
 

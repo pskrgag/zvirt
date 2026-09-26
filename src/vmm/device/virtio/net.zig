@@ -3,11 +3,13 @@
 const std = @import("std");
 const queue = @import("queue.zig");
 const Tap = @import("utils").Tap;
+const Mac = @import("utils").Mac;
 const VirtioCore = @import("root.zig").VirtioCore;
 const NotifyResult = @import("root.zig").NotifyResult;
 const Vm = @import("../../root.zig").Vm;
 const VirtQueueToken = @import("root.zig").VirtQueueToken;
 const posix = std.posix;
+const PciClass = @import("../pci/config.zig").PciClass;
 
 const log = std.log.scoped(.virtio_net);
 
@@ -56,6 +58,9 @@ const TxBuffers = struct {
     }
 };
 
+const TX_QUEUE = 0;
+const RX_QUEUE = 1;
+
 pub const Net = struct {
     pub const Completion = struct {
         head: u16,
@@ -75,6 +80,9 @@ pub const Net = struct {
     alloc: std.mem.Allocator,
 
     pub const MMIO_TYPE = 0x1;
+    pub const PCI_DEVICE_ID = 0x1041;
+    pub const PCI_SUBCLASS = 0x0;
+    pub const PCI_CLASS: PciClass = .Nic;
 
     const Self = @This();
 
@@ -82,14 +90,19 @@ pub const Net = struct {
         return VIRTIO_NET_F_MAC;
     }
 
-    pub fn new(mac: [6]u8, iface: []const u8, alloc: std.mem.Allocator) !Self {
+    pub fn max_queues(self: *const Self) usize {
+        _ = self;
+        return 2;
+    }
+
+    pub fn new(mac: Mac, iface: []const u8, alloc: std.mem.Allocator) !Self {
         var tap = try Tap.new(iface);
         errdefer tap.deinit();
 
         var config: c.virtio_net_config = undefined;
 
         @memset(std.mem.asBytes(&config), 0xff);
-        config.mac = mac;
+        config.mac = mac.mac;
 
         return .{
             .tx_buffers = try TxBuffers.new(alloc),
@@ -101,11 +114,11 @@ pub const Net = struct {
     }
 
     fn tx_queue(self: *Self, io: std.Io) !VirtQueueToken {
-        return self.core.get_queue(0, io);
+        return self.core.get_queue(TX_QUEUE, io);
     }
 
     fn rx_queue(self: *Self, io: std.Io) !VirtQueueToken {
-        return self.core.get_queue(1, io);
+        return self.core.get_queue(RX_QUEUE, io);
     }
 
     fn try_read_packets(self: *Self, token: *const VirtQueueToken) !bool {
@@ -136,11 +149,12 @@ pub const Net = struct {
 
     // Called on edge triggered tap event. It might be the case that no tx_buffers were supplied.
     // In such case buffer is left in kernel queue
-    pub fn handle_completion_event(self: *Self, io: std.Io) !bool {
+    pub fn handle_completion_event(self: *Self, io: std.Io) !NotifyResult {
         const tx = try self.tx_queue(io);
         defer self.core.unlock_queue(tx, io);
 
-        return self.try_read_packets(&tx);
+        const processed = try self.try_read_packets(&tx);
+        return .{ .proccessed = processed, .queue = TX_QUEUE };
     }
 
     fn proccess_rx_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {

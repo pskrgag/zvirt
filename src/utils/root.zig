@@ -5,6 +5,7 @@ pub const Epoll = @import("epoll.zig");
 pub const EventFd = @import("eventfd.zig");
 pub const IdAlloc = @import("idalloc.zig");
 pub const Tap = @import("tap.zig").Tap;
+pub const Mac = @import("mac.zig").Mac;
 
 test {
     _ = @import("lazy.zig");
@@ -12,4 +13,5 @@ test {
     _ = @import("eventfd.zig");
     _ = @import("idalloc.zig");
     // _ = @import("tap.zig");
+    _ = @import("mac.zig");
 }

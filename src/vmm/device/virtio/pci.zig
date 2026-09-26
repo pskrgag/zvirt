@@ -9,6 +9,7 @@ const PciConfigSpace = pci_config.PciConfigSpace;
 const Bar = @import("../pci/bar.zig").Bar;
 const BarAllocator = @import("../pci/bar.zig").BarAllocator;
 const Block = @import("block.zig").Block;
+const Net = @import("net.zig").Net;
 const Vm = @import("../../root.zig").Vm;
 pub const c = @cImport({
     @cInclude("linux/virtio_pci.h");
@@ -249,9 +250,10 @@ fn VirtioPci(comptime Device: type) type {
         }
 
         fn handle_completion_event(self: *Self, io: std.Io) !void {
-            // There only one queue in async mode
-            if (try self.device.handle_completion_event(io))
-                try self.signal_queue(0, io);
+            const res = try self.device.handle_completion_event(io);
+
+            if (res.proccessed)
+                try self.signal_queue(res.queue, io);
         }
 
         pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
@@ -302,6 +304,7 @@ fn VirtioPci(comptime Device: type) type {
 
 pub const VirtioPciDevice = union(enum) {
     block: *VirtioPci(Block),
+    net: *VirtioPci(Net),
 
     const Self = @This();
 
@@ -336,7 +339,12 @@ pub const VirtioPciDevice = union(enum) {
 
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };
             },
-            else => @panic("todo"),
+            .NetDevice => |net| blk: {
+                var device = try Net.new(net.mac, "net0", alloc);
+                errdefer device.deinit(io);
+
+                break :blk .{ .net = try VirtioPci(Net).new(device, bus, vm, alloc) };
+            },
         };
     }
 

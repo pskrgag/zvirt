@@ -8,6 +8,7 @@ const Vm = @import("../../root.zig").Vm;
 const GuestMemory = @import("../../memory.zig").GuestMemory;
 const Mutex = std.Io.Mutex;
 const EventFd = @import("utils").EventFd.EventFd;
+const Mac = @import("utils").Mac;
 
 const log = std.log.scoped(.virtio);
 
@@ -30,7 +31,7 @@ pub const VirtioDeviceType = enum(u32) {
 pub const VirtioDeviceInit = union(VirtioDeviceType) {
     BlockDevice: struct { path: []const u8, async: bool },
     NetDevice: struct {
-        mac: [6]u8,
+        mac: Mac,
         iface: []const u8,
     },
 };

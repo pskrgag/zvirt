@@ -38,6 +38,7 @@ pub const Command = packed struct(u16) {
 pub const PciClass = enum(u8) {
     Brigde = 0x6,
     Storage = 0x1,
+    Nic = 0x2,
 };
 
 pub const PciConfigSpace = struct {

@@ -106,7 +106,7 @@ pub const Block = struct {
         self.file.close(io);
     }
 
-    pub fn handle_completion_event(self: *Self, io: std.Io) !bool {
+    pub fn handle_completion_event(self: *Self, io: std.Io) !NotifyResult {
         _ = try self.engine.ack_event();
 
         // NOTE: support only one queue in async mode (do we need more? I don't think so)
@@ -135,7 +135,7 @@ pub const Block = struct {
             log.debug("batched {}\n", .{batch});
         }
 
-        return consumed;
+        return .{ .proccessed = consumed, .queue = 0 };
     }
 
     pub fn handle_notify(self: *Self, fd: std.posix.fd_t, vm: *Vm, io: std.Io) !NotifyResult {
