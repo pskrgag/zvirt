@@ -1177,7 +1177,7 @@ fn test_virtio_net(smp: u8, pci: bool) !void {
     try input_writer.writeStreamingAll(io, "ip link set eth0 up && echo 'ok1'\n");
     try wait_for_output(&uart_output, "ok1");
 
-    try test_utils.run_program(io, &.{ "arping", "-I", TEST_IFACE, "-s", "192.0.2.1", "-c", "3", "192.0.2.2" });
+    try test_utils.run_program(io, &.{ "arping", "-I", TEST_IFACE, "-c", "3", "192.0.2.2" });
 }
 
 test "Virtio net MMIO" {
