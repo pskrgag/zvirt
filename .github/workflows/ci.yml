@@ -39,7 +39,10 @@ jobs:
         run: just initrds
 
       - name: Setup tap
-        run: just tap
+        run: |
+          just tap
+          # Give net_raw to arping, which it apparently needs on CI
+          sudo setcap cap_net_raw+ep $(which arping)
 
       - name: Run Debug Tests
         timeout-minutes: 10
