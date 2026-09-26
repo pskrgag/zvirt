@@ -38,6 +38,9 @@ jobs:
       - name: Build test initrds
         run: just initrds
 
+      - name: Setup tap
+        run: just tap
+
       - name: Run Debug Tests
         timeout-minutes: 10
         run: zig build test -Dci=true
