@@ -142,7 +142,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
     for (self.virtio_devs.items) |*dev| {
-        dev.deinit(io);
+        dev.deinit(alloc, io);
     }
 
     while (self.ranges.getMin()) |node| {
@@ -170,6 +170,7 @@ pub fn register_device(self: *Self, vm: *Vm, dev: VirtioMmioDevice) !void {
 
     try dev.register_events(vm, @truncate(id));
     self.virtio_devs.appendAssumeCapacity(dev);
+    errdefer self.virtio_devs.items.len -= 1;
 
     const stored_dev = &self.virtio_devs.items[id];
     try self.register_range(stored_dev.base(), 4096, stored_dev.mmio_device());

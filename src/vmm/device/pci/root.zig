@@ -161,7 +161,7 @@ pub const PciDeviceCore = struct {
 };
 
 pub const PciDevice = union(enum) {
-    Brigde: PciBridge,
+    Brigde: *PciBridge,
     Virtio: VirtioPciDevice,
 
     const Self = @This();
@@ -182,33 +182,32 @@ pub const PciDevice = union(enum) {
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         switch (self.*) {
-            .Brigde => {},
+            .Brigde => |bridge| alloc.destroy(bridge),
             .Virtio => |*device| device.deinit(alloc, io),
         }
     }
 
-    pub fn read_config(self: *Self, offset: u8, io: std.Io) !u32 {
+    fn pci_core(self: *Self) *PciDeviceCore {
         return switch (self.*) {
-            inline else => |*device| device.pci_core().read_config(u32, offset, io),
+            .Brigde => |bridge| bridge.pci_core(),
+            .Virtio => |*device| device.pci_core(),
         };
+    }
+
+    pub fn read_config(self: *Self, offset: u8, io: std.Io) !u32 {
+        return self.pci_core().read_config(u32, offset, io);
     }
 
     pub fn write_config(self: *Self, offset: u8, data: []const u8, io: std.Io) !void {
-        return switch (self.*) {
-            inline else => |*device| try device.pci_core().write_config(offset, data, io),
-        };
+        return self.pci_core().write_config(offset, data, io);
     }
 
     pub fn num_bars(self: *Self) usize {
-        return switch (self.*) {
-            inline else => |*device| device.pci_core().active_bars,
-        };
+        return self.pci_core().active_bars;
     }
 
     pub fn bar_mmio(self: *Self, idx: usize) ?BarMmio {
-        return switch (self.*) {
-            inline else => |*device| device.pci_core().bar_mmio(idx),
-        };
+        return self.pci_core().bar_mmio(idx);
     }
 };
 
@@ -220,12 +219,17 @@ pub const PciBus = struct {
 
     pub fn new(bridge: PciBridge, config: *const VmConfig, alloc: std.mem.Allocator) !*Self {
         const self = try alloc.create(Self);
+        errdefer alloc.destroy(self);
+
+        const bridge_ptr = try alloc.create(PciBridge);
+        errdefer alloc.destroy(bridge_ptr);
+        bridge_ptr.* = bridge;
 
         var devs: [MAX_DEVICES]?PciDevice = @splat(null);
         const pci_range = arch.layout.pci_range(config);
         const allocator = BarAllocator.new(pci_range.start, pci_range.length);
 
-        devs[0] = PciDevice{ .Brigde = bridge };
+        devs[0] = PciDevice{ .Brigde = bridge_ptr };
         self.* = .{ .devices = devs, .allocator = allocator };
 
         return self;

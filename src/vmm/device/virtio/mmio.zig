@@ -231,8 +231,8 @@ pub fn VirtioMmio(comptime Device: type) type {
 }
 
 pub const VirtioMmioDevice = union(enum) {
-    block: VirtioMmio(Block),
-    net: VirtioMmio(Net),
+    block: *VirtioMmio(Block),
+    net: *VirtioMmio(Net),
 
     const Self = @This();
 
@@ -248,25 +248,36 @@ pub const VirtioMmioDevice = union(enum) {
         io: std.Io,
     ) !Self {
         return switch (kind) {
-            .BlockDevice => |block| .{ .block = blk: {
+            .BlockDevice => |block| blk: {
                 const num_queues = if (block.async)
                     1
                 else
                     vm.config.smp;
 
-                break :blk try VirtioMmio(Block).new(
+                var device = try Block.new(block.path, num_queues, block.async, alloc, io);
+                errdefer device.deinit(io);
+
+                const transport = try alloc.create(VirtioMmio(Block));
+                errdefer alloc.destroy(transport);
+
+                transport.* = try VirtioMmio(Block).new(
                     base_address,
-                    try Block.new(block.path, num_queues, block.async, alloc, io),
+                    device,
                     vm,
                     irq_num,
                 );
-            } },
-            .NetDevice => |net| .{ .net = try VirtioMmio(Net).new(
-                base_address,
-                try Net.new(net.mac, net.iface, alloc),
-                vm,
-                irq_num,
-            ) },
+                break :blk .{ .block = transport };
+            },
+            .NetDevice => |net| blk: {
+                var device = try Net.new(net.mac, net.iface, alloc);
+                errdefer device.deinit(io);
+
+                const transport = try alloc.create(VirtioMmio(Net));
+                errdefer alloc.destroy(transport);
+
+                transport.* = try VirtioMmio(Net).new(base_address, device, vm, irq_num);
+                break :blk .{ .net = transport };
+            },
         };
     }
 
@@ -322,43 +333,46 @@ pub const VirtioMmioDevice = union(enum) {
 
     pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
         return switch (self.*) {
-            inline else => |*device| device.handle_event(fd, io),
+            inline else => |device| device.handle_event(fd, io),
         };
     }
 
     pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
         return switch (self.*) {
-            inline else => |*device| device.register_events(vm, id),
+            inline else => |device| device.register_events(vm, id),
         };
     }
 
     pub fn base(self: *const Self) u64 {
         return switch (self.*) {
-            inline else => |*device| device.base,
+            inline else => |device| device.base,
         };
     }
 
     pub fn irq(self: *const Self) u32 {
         return switch (self.*) {
-            inline else => |*device| device.irq,
+            inline else => |device| device.irq,
         };
     }
 
     pub fn handle_read(self: *Self, reg_raw: u32, io: std.Io) !u32 {
         return switch (self.*) {
-            inline else => |*device| device.handle_read(reg_raw, io),
+            inline else => |device| device.handle_read(reg_raw, io),
         };
     }
 
     pub fn handle_write(self: *Self, reg_raw: u32, data: u32, io: std.Io) !void {
         return switch (self.*) {
-            inline else => |*device| device.handle_write(reg_raw, data, io),
+            inline else => |device| device.handle_write(reg_raw, data, io),
         };
     }
 
-    pub fn deinit(self: *Self, io: std.Io) void {
-        return switch (self.*) {
-            inline else => |*device| device.deinit(io),
-        };
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+        switch (self.*) {
+            inline else => |device| {
+                device.deinit(io);
+                alloc.destroy(device);
+            },
+        }
     }
 };

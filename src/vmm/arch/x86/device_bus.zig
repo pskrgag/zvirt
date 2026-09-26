@@ -96,7 +96,7 @@ pub fn setup_devices(
                 alloc,
                 io,
             );
-            errdefer dev.deinit(io);
+            errdefer dev.deinit(alloc, io);
 
             try self.mmio_bus.register_device(vm, dev);
         } else {
@@ -140,7 +140,7 @@ pub fn setup_devices(
                 alloc,
                 io,
             );
-            errdefer dev.deinit(io);
+            errdefer dev.deinit(alloc, io);
 
             try self.mmio_bus.register_device(vm, dev);
         } else {
