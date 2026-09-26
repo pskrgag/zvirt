@@ -699,6 +699,19 @@ fn wait_for_output(
     return error.Timeout;
 }
 
+fn login_in_initrd(uart_output: *test_utils.TmpUartOutput, input_writer: *const std.Io.File) !void {
+    const io = std.testing.io;
+
+    // Login discards all input data after <enter>. So we need to push data lock-step.
+    try wait_for_output(uart_output, "login");
+    try input_writer.writeStreamingAll(io, "root\n");
+
+    try wait_for_output(uart_output, "Password:");
+    try input_writer.writeStreamingAll(io, "root\n");
+
+    try wait_for_output(uart_output, "# ");
+}
+
 test "linux login and reboot" {
     _ = try kvm_system.get();
 
@@ -764,13 +777,7 @@ test "linux login and reboot" {
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
     // Login discards all input data after <enter>. So we need to push data lock-step.
-    try wait_for_output(&uart_output, "login");
-    try input_writer.writeStreamingAll(io, "root\n");
-
-    try wait_for_output(&uart_output, "Password:");
-    try input_writer.writeStreamingAll(io, "root\n");
-
-    try wait_for_output(&uart_output, "# ");
+    try login_in_initrd(&uart_output, &input_writer);
     try input_writer.writeStreamingAll(io, "reboot\n");
 
     thread.join();
@@ -843,17 +850,8 @@ test "vCPU handles unknown exit reason gracefully" {
     });
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
-
-    // Login discards all input data after <enter>. So we need to push data lock-step.
-    try wait_for_output(&uart_output, "login");
-    try input_writer.writeStreamingAll(io, "root\n");
-
-    try wait_for_output(&uart_output, "Password:");
-    try input_writer.writeStreamingAll(io, "root\n");
-
-    try wait_for_output(&uart_output, "# ");
+    try login_in_initrd(&uart_output, &input_writer);
     try input_writer.writeStreamingAll(io, "reboot\n");
-
     thread.join();
 }
 
@@ -1090,6 +1088,114 @@ test "Virtio PCI IO write (sync+smp)" {
     try test_virtio_write(true, false, 8);
 }
 
+// Keep in sync with Justfile
+const TEST_IFACE = "net0";
+const TEST_MAC = "aa:aa:aa:aa:aa:aa";
+
+fn test_virtio_net(smp: u8, pci: bool) !void {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
+    var fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/bzImage",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    const initrd_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/initrd.img",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(initrd_bytes);
+
+    var uart_output = try test_utils.TmpUartOutput.create();
+    defer uart_output.deinit();
+    errdefer dump_whole_file(&uart_output) catch {};
+
+    var pipe_fds: [2]posix.fd_t = undefined;
+    const pipe_rc = linux.pipe2(&pipe_fds, .{ .CLOEXEC = true });
+    switch (posix.errno(pipe_rc)) {
+        .SUCCESS => {},
+        else => |err| return posix.unexpectedErrno(err),
+    }
+
+    const uart_input: std.Io.File = .{
+        .handle = pipe_fds[0],
+        .flags = .{ .nonblocking = false },
+    };
+    defer uart_input.close(io);
+
+    const input_writer: std.Io.File = .{
+        .handle = pipe_fds[1],
+        .flags = .{ .nonblocking = false },
+    };
+    defer input_writer.close(io);
+
+    var vm = try Vm.new(.{
+        .ram_size = 1 << 30,
+        .binary = binary_bytes,
+        .initramfs = initrd_bytes,
+        .pci = pci,
+        .network = .{ .mac = try utils.Mac.from_str(TEST_MAC), .iface = TEST_IFACE },
+        .smp = smp,
+    }, io, allocator);
+    defer vm.deinit(allocator, io);
+
+    try vm.attach_console(.{
+        .index = 0,
+        .input = uart_input,
+        .output = uart_output.file,
+    });
+
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
+
+    defer {
+        vm.stop() catch {};
+        thread.join();
+    }
+
+    try login_in_initrd(&uart_output, &input_writer);
+
+    try input_writer.writeStreamingAll(io, "ip a\n");
+    try wait_for_output(&uart_output, TEST_MAC);
+
+    // Setup the device
+    try input_writer.writeStreamingAll(io, "ip addr add 192.0.2.2/24 dev eth0 && echo 'ok'\n");
+    try wait_for_output(&uart_output, "ok");
+
+    try input_writer.writeStreamingAll(io, "ip link set eth0 up && echo 'ok1'\n");
+    try wait_for_output(&uart_output, "ok1");
+
+    try test_utils.run_program(io, &.{ "arping", "-I", TEST_IFACE, "-s", "192.0.2.1", "-c", "3", "192.0.2.2" });
+}
+
+test "Virtio net MMIO" {
+    try test_virtio_net(1, false);
+}
+
+test "Virtio net PCI" {
+    try test_virtio_net(1, true);
+}
+
+test "Virtio net MMIO (smp)" {
+    try test_virtio_net(8, false);
+}
+
+test "Virtio net PCI (smp)" {
+    try test_virtio_net(8, true);
+}
+
 test "SMP works" {
     _ = try kvm_system.get();
 
@@ -1156,14 +1262,7 @@ test "SMP works" {
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
-    // Login discards all input data after <enter>. So we need to push data lock-step.
-    try wait_for_output(&uart_output, "login");
-    try input_writer.writeStreamingAll(io, "root\n");
-
-    try wait_for_output(&uart_output, "Password:");
-    try input_writer.writeStreamingAll(io, "root\n");
-
-    try wait_for_output(&uart_output, "# ");
+    try login_in_initrd(&uart_output, &input_writer);
 
     try input_writer.writeStreamingAll(io, "cat /proc/cpuinfo | grep processor | wc -l\n");
     try wait_for_output(&uart_output, "16");

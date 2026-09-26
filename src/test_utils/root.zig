@@ -4,10 +4,32 @@ const std = @import("std");
 const posix = std.posix;
 const linux = std.os.linux;
 const Dir = std.Io.Dir;
-const log = std.log.scoped(.fd_leak_detector);
+const log = std.log.scoped(.test_utils);
 
 pub const mmap = @import("mmap.zig");
 pub const DiskImage = @import("disk.zig").DiskImage;
+
+pub fn run_program(io: std.Io, argv: []const []const u8) !void {
+    var child = try std.process.spawn(io, .{
+        .argv = argv,
+        .stdin = .close,
+        .stdout = .{ .file = std.Io.File.stderr() },
+        .stderr = .inherit,
+    });
+    defer child.kill(io);
+
+    const term = try child.wait(io);
+    switch (term) {
+        .exited => |code| {
+            if (code == 0)
+                return;
+
+            log.warn("{s} exited with code {}", .{ argv[0], code });
+        },
+        else => log.warn("{s} terminated: {}", .{ argv[0], term }),
+    }
+    return error.ProgramFailed;
+}
 
 pub const TmpUartOutput = struct {
     tmp: std.testing.TmpDir,

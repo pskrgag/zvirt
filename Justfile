@@ -32,3 +32,8 @@ initrds:
         ) | gzip -n > "$output_dir/$name.img"
         echo "Built zig-out/initrds/$name.img"
     done
+
+tap:
+	sudo ip tuntap add dev net0 mode tap user $(id -un)
+	sudo ip addr add 192.0.2.1/24 dev net0
+	sudo ip link set net0 up

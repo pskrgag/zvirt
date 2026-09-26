@@ -247,6 +247,7 @@ pub const Net = struct {
 
     pub fn deinit(self: *Self, io: std.Io) void {
         _ = io;
+
         self.core.deinit();
         self.tap.deinit();
         self.tx_buffers.deinit(self.alloc);
