@@ -43,8 +43,8 @@ fn VirtioPci(comptime Device: type) type {
         pci: *PciDeviceCore,
         allocator: std.mem.Allocator,
         state_lock: std.Io.Mutex = .init,
-        device_sel: u1 = 0,
-        driver_sel: u1 = 0,
+        device_sel: u32 = 0,
+        driver_sel: u32 = 0,
         change_vector: u32 = c.VIRTIO_MSI_NO_VECTOR,
         queue_select: u16 = 0,
         queue_vectors: [virtio.MAX_QUEUES_SUPPORTED]Atomic(u32) = @splat(Atomic(u32).init(c.VIRTIO_MSI_NO_VECTOR)),
@@ -297,6 +297,7 @@ fn VirtioPci(comptime Device: type) type {
                 try self.handle_generic_cap_write(offset, data, io);
             } else if (offset >= 256 and offset < 356) {
                 // Do nothing here, since it should be handled by ioevent
+                std.debug.assert(false);
             }
         }
     };
@@ -340,7 +341,7 @@ pub const VirtioPciDevice = union(enum) {
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };
             },
             .NetDevice => |net| blk: {
-                var device = try Net.new(net.mac, "net0", alloc);
+                var device = try Net.new(net.mac, net.iface, alloc);
                 errdefer device.deinit(io);
 
                 break :blk .{ .net = try VirtioPci(Net).new(device, bus, vm, alloc) };

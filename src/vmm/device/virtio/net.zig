@@ -87,7 +87,7 @@ pub const Net = struct {
     const Self = @This();
 
     pub fn features() u32 {
-        return VIRTIO_NET_F_MAC;
+        return (1 << c.VIRTIO_NET_F_MAC) | (1 << c.VIRTIO_NET_F_GUEST_CSUM);
     }
 
     pub fn max_queues(self: *const Self) usize {
@@ -96,7 +96,7 @@ pub const Net = struct {
     }
 
     pub fn new(mac: Mac, iface: []const u8, alloc: std.mem.Allocator) !Self {
-        var tap = try Tap.new(iface);
+        var tap = try Tap.new(iface, @sizeOf(c.virtio_net_hdr_mrg_rxbuf));
         errdefer tap.deinit();
 
         var config: c.virtio_net_config = undefined;
@@ -125,17 +125,16 @@ pub const Net = struct {
         var handled = false;
 
         while (self.tx_buffers.peek_chain()) |ch| {
+            std.debug.assert(ch.buffer_count != 0);
+
             const frame_size = try self.tap.readv(&ch.buffer[0..ch.buffer_count]);
             if (frame_size == 0)
                 break;
 
-            const header: *c.virtio_net_hdr_mrg_rxbuf = @ptrCast(@alignCast(ch.buffer[0].base - @sizeOf(c.virtio_net_hdr_mrg_rxbuf)));
-
-            header.* = std.mem.zeroes(c.virtio_net_hdr_mrg_rxbuf);
+            const header: *c.virtio_net_hdr_mrg_rxbuf = @ptrCast(@alignCast(ch.buffer[0].base));
             header.num_buffers = 1;
-            header.hdr.gso_type = 0;
 
-            const res = token.state.queue.push_used(ch.head, @truncate(frame_size + @sizeOf(c.virtio_net_hdr_mrg_rxbuf)));
+            const res = token.state.queue.push_used(ch.head, @truncate(frame_size));
             std.debug.assert(res);
 
             handled = true;
@@ -176,10 +175,9 @@ pub const Net = struct {
 
             for (rqs, 0..) |r, i| {
                 const slice = r.as_rw() orelse return error.InvalidBuffer;
-                const offset: usize = if (i == 0) @sizeOf(c.virtio_net_hdr_mrg_rxbuf) else 0;
 
-                chain.buffer[i].base = slice.ptr + offset;
-                chain.buffer[i].len = slice.len - offset;
+                chain.buffer[i].base = slice.ptr;
+                chain.buffer[i].len = slice.len;
             }
 
             try self.tx_buffers.push(chain);
@@ -206,17 +204,17 @@ pub const Net = struct {
 
             for (rqs, 0..) |r, i| {
                 const slice = r.as_ro();
-                const offset: usize = if (i == 0) @sizeOf(c.virtio_net_hdr_mrg_rxbuf) else 0;
 
-                buffers[i].base = slice.ptr + offset;
-                buffers[i].len = slice.len - offset;
+                buffers[i].base = slice.ptr;
+                buffers[i].len = slice.len;
             }
 
             const res = try self.tap.writev(buffers[0..rqs.len]);
+            _ = res;
 
             const sent = token.state.queue.push_used(
                 ch.head,
-                @truncate(res),
+                0,
             );
             std.debug.assert(sent);
         }

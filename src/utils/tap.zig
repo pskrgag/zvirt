@@ -18,7 +18,7 @@ pub const Tap = struct {
 
     const Self = @This();
 
-    pub fn new(name: []const u8) !Self {
+    pub fn new(name: []const u8, header_size: i32) !Self {
         var c_name: [c.IFNAMSIZ]u8 = @splat(0);
 
         if (name.len > c.IFNAMSIZ - 1)
@@ -51,12 +51,18 @@ pub const Tap = struct {
         @memcpy(&req.ifr_ifrn.ifrn_name, &c_name);
 
         // We don't care about packet info (i guess?)
-        req.ifr_ifru.ifru_flags = c.IFF_TAP | c.IFF_NO_PI;
+        req.ifr_ifru.ifru_flags = c.IFF_TAP | c.IFF_NO_PI | c.IFF_VNET_HDR;
 
-        const res = linux.ioctl(fd, c.TUNSETIFF, @intFromPtr(&req));
+        var res = linux.ioctl(fd, c.TUNSETIFF, @intFromPtr(&req));
         if (linux.errno(res) != .SUCCESS) {
             log.err("Failed to TUNSETIFF: {}\n", .{linux.errno(res)});
             return error.TUNSETIFF;
+        }
+
+        res = linux.ioctl(fd, c.TUNSETVNETHDRSZ, @intFromPtr(&header_size));
+        if (linux.errno(res) != .SUCCESS) {
+            log.err("Failed to TUNSETVNETHDRSZ: {}\n", .{linux.errno(res)});
+            return error.TUNSETVNETHDRSZ;
         }
 
         return .{ .fd = fd };
@@ -102,6 +108,6 @@ pub const Tap = struct {
 };
 
 test "tap" {
-    var tap = try Tap.new("net0");
+    var tap = try Tap.new("net0", 12);
     defer tap.deinit();
 }
