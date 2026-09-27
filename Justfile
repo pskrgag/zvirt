@@ -34,6 +34,6 @@ initrds:
     done
 
 tap:
-	sudo ip tuntap add dev net0 mode tap user $(id -un)
+	sudo ip tuntap add dev net0 mode tap user paskripkin
 	sudo ip addr add 192.0.2.1/24 dev net0
 	sudo ip link set net0 up

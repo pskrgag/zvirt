@@ -24,12 +24,16 @@ pub fn run_program(io: std.Io, argv: []const []const u8) !void {
         const buffers = .{&buffer};
 
         while (true) {
-            const read = out.readStreaming(io, &buffers) catch { break; };
+            const read = out.readStreaming(io, &buffers) catch {
+                break;
+            };
 
             if (read != buffer.len)
                 break;
 
-            std.Io.File.stderr().writeStreamingAll(io, buffer[0..read]) catch { break; };
+            std.Io.File.stderr().writeStreamingAll(io, buffer[0..read]) catch {
+                break;
+            };
         }
     }
 
