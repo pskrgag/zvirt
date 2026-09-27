@@ -1091,6 +1091,20 @@ test "Virtio PCI IO write (sync+smp)" {
 // Keep in sync with Justfile
 const TEST_IFACE = "net0";
 const TEST_MAC = "aa:aa:aa:aa:aa:aa";
+const tcp_test_server =
+    \\import socket
+    \\with socket.socket() as server:
+    \\    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    \\    server.settimeout(10)
+    \\    server.bind(("192.0.2.1", 12345))
+    \\    server.listen()
+    \\    print("tcp-ready", flush=True)
+    \\    conn, _ = server.accept()
+    \\    with conn:
+    \\        conn.settimeout(10)
+    \\        print(conn.recv(4096).decode(), flush=True)
+    \\        conn.sendall(b"hello from host")
+;
 
 fn test_virtio_net(smp: u8, pci: bool) !void {
     _ = try kvm_system.get();
@@ -1177,7 +1191,31 @@ fn test_virtio_net(smp: u8, pci: bool) !void {
     try input_writer.writeStreamingAll(io, "ip link set eth0 up && echo 'ok1'\n");
     try wait_for_output(&uart_output, "ok1");
 
+    // Test ARP
     try test_utils.run_program(io, &.{ "arping", "-I", TEST_IFACE, "-c", "3", "192.0.2.2" });
+
+    // Test ICMP
+    try test_utils.run_program(io, &.{ "ping", "192.0.2.2", "-c", "10" });
+
+    // Exchange raw text in both directions over one TCP connection.
+    var host_output = try test_utils.TmpUartOutput.create();
+    defer host_output.deinit();
+
+    var server = try std.process.spawn(io, .{
+        .argv = &.{ "python3", "-c", tcp_test_server },
+        .stdin = .close,
+        .stdout = .{ .file = host_output.file },
+        .stderr = .inherit,
+    });
+    defer server.kill(io);
+
+    try wait_for_output(&host_output, "tcp-ready");
+    try input_writer.writeStreamingAll(io, "printf 'hello from guest' | socat - TCP4:192.0.2.1:12345\n");
+    try wait_for_output(&host_output, "hello from guest");
+    try wait_for_output(&uart_output, "hello from host");
+
+    const term = try server.wait(io);
+    try std.testing.expect(term == .exited and term.exited == 0);
 }
 
 test "Virtio net MMIO" {
