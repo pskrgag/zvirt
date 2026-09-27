@@ -13,10 +13,25 @@ pub fn run_program(io: std.Io, argv: []const []const u8) !void {
     var child = try std.process.spawn(io, .{
         .argv = argv,
         .stdin = .close,
-        .stdout = .{ .file = std.Io.File.stderr() },
+        .stdout = .pipe,
         .stderr = .inherit,
     });
     defer child.kill(io);
+
+    errdefer {
+        const out = child.stdout.?;
+        var buffer: [2048]u8 = undefined;
+        const buffers = .{&buffer};
+
+        while (true) {
+            const read = out.readStreaming(io, &buffers) catch { break; };
+
+            if (read != buffer.len)
+                break;
+
+            std.Io.File.stderr().writeStreamingAll(io, buffer[0..read]) catch { break; };
+        }
+    }
 
     const term = try child.wait(io);
     switch (term) {
