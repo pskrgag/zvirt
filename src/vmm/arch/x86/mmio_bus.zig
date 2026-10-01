@@ -44,6 +44,7 @@ const Range = struct {
 const TreapNode = struct {
     node: DeviceTreap.Node,
     value: MmioDevice,
+    name: []const u8,
 };
 
 pub fn handle_event(
@@ -55,11 +56,12 @@ pub fn handle_event(
     try self.virtio_devs.items[id].handle_event(fd, io);
 }
 
-pub fn register_range(self: *Self, start: u64, size: usize, mmio_range: MmioDevice) !void {
+pub fn register_range(self: *Self, start: u64, size: usize, name: []const u8, mmio_range: MmioDevice) !void {
     const node = try self.alloc.create(TreapNode);
     errdefer self.alloc.destroy(node);
 
     node.value = mmio_range;
+    node.name = name;
 
     var iter = self.ranges.inorderIterator();
     const range = Range{ .start = start, .size = size };
@@ -95,7 +97,6 @@ fn find_region(tree: *const DeviceTreap, address: u64) ?*DeviceTreap.Node {
 }
 
 pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
-    // log.debug("access: {any}", .{mmio_request});
     switch (mmio_request.pa) {
         0xa0000...0xbffff,
         0xc0000...0xfffff,
@@ -111,6 +112,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
                 const entry: *TreapNode = @fieldParentPtr("node", node);
                 const offset = mmio_request.pa - node.key.start;
 
+                log.debug("MMIO exit for {s}\n", .{entry.name});
                 if (mmio_request.write) {
                     try entry.value.write_fn(
                         entry.value.context,
@@ -173,6 +175,6 @@ pub fn register_device(self: *Self, vm: *Vm, dev: VirtioMmioDevice) !void {
     errdefer self.virtio_devs.items.len -= 1;
 
     const stored_dev = &self.virtio_devs.items[id];
-    try self.register_range(stored_dev.base(), 4096, stored_dev.mmio_device());
+    try self.register_range(stored_dev.base(), 4096, dev.name(), stored_dev.mmio_device());
     // TODO: unregister in case of an error
 }

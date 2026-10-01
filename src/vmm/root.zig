@@ -12,6 +12,8 @@ const Epoll = utils.Epoll.Epoll;
 const EpollEvent = utils.Epoll.Event;
 const linux = std.os.linux;
 const EventFd = utils.EventFd.EventFd;
+const stat = @import("stat.zig");
+const Statistics = stat.Statistics;
 pub const IoResult = kvm.IoResult;
 
 const memory = @import("memory.zig");
@@ -68,6 +70,9 @@ pub const VmConfig = struct {
         iface: []const u8,
     } = null,
 
+    // Dump statistics at the end
+    stat: bool = false,
+
     const Self = @This();
 
     fn verify(self: *const Self) !void {
@@ -105,6 +110,7 @@ pub const Vm = struct {
     state: VmState = .{},
     old_sigaction: posix.Sigaction,
     archvm: arch.ArchVm,
+    statistics: Statistics = Statistics.new(),
 
     const Self = @This();
 
@@ -159,6 +165,10 @@ pub const Vm = struct {
         return self;
     }
 
+    pub fn stats(self: *Self) *Statistics {
+        return &self.statistics;
+    }
+
     // thread-unsafe
     pub fn attach_console(self: *Self, console: VmConsoleConfig) !void {
         if (self.state.state.load(.monotonic) != .Initialized)
@@ -189,6 +199,17 @@ pub const Vm = struct {
         for (self.vcpus) |vcpu| {
             if (vcpu) |cpu|
                 cpu.deinit(alloc, io);
+        }
+
+        if (self.config.stat) {
+            log.info("VMM Statistics:\n", .{});
+
+            inline for (std.meta.fields(stat.StatKind)) |field| {
+                const value: stat.StatKind = @enumFromInt(field.value);
+                const name = @tagName(value);
+
+                std.debug.print("{s}: {d}\n", .{name, self.statistics.read(value)});
+            }
         }
 
         self.epoll.deinit();

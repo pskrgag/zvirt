@@ -217,8 +217,6 @@ pub const Net = struct {
         var token = try self.core.notified_queue(fd, io);
         defer self.core.unlock_queue(token, io);
 
-        log.debug("Queue {} kick\n", .{token.idx});
-
         if (token.idx == 0) {
             return self.proccess_rx_queue(vm, &token);
         } else {

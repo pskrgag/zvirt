@@ -112,6 +112,7 @@ pub const VCpu = struct {
                 continue;
             };
 
+
             const reason = self.cpu.exit_reason() catch {
                 log.warn("unknown exit reason", .{});
                 self.exit_reason.store(.InternalError, .monotonic);
@@ -120,6 +121,8 @@ pub const VCpu = struct {
 
             switch (reason) {
                 .Io => |io_req| {
+                    self.vm.stats().inc(.vmexit_io);
+
                     // Detecting write to fake port, which indicates test exit
                     if (try self.vm.archvm.device_bus.handle_io(io_req, io)) {
                         self.exit_reason.store(.TestExit, .monotonic);
@@ -131,6 +134,7 @@ pub const VCpu = struct {
                     break;
                 },
                 .Mmio => |mmio| {
+                    self.vm.stats().inc(.vmexit_mmio);
                     result = try self.vm.archvm.device_bus.handle_mmio(mmio, io);
                 },
                 .Interrupted => {},

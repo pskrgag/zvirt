@@ -118,7 +118,7 @@ pub fn setup_devices(
 
             for (0..bars) |i| {
                 if (pci_dev.bar_mmio(i)) |bar|
-                    try self.mmio_bus.register_range(bar.base, bar.size, bar.dev);
+                    try self.mmio_bus.register_range(bar.base, bar.size, "PCI BAR block", bar.dev);
             }
 
             try pci_dev.register_events(vm, 1);
@@ -159,7 +159,7 @@ pub fn setup_devices(
 
             for (0..bars) |i| {
                 if (pci_dev.bar_mmio(i)) |bar|
-                    try self.mmio_bus.register_range(bar.base, bar.size, bar.dev);
+                    try self.mmio_bus.register_range(bar.base, bar.size, "PCI BAR net", bar.dev);
             }
 
             try pci_dev.register_events(vm, 2);

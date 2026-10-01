@@ -239,6 +239,13 @@ pub const VirtioMmioDevice = union(enum) {
     pub const Register = MmioRegister;
     pub const DeviceType = VirtioDeviceInit;
 
+    pub fn name(self: *const Self) []const u8 {
+        return switch (self.*) {
+            .block => "virtio block",
+            .net => "virtio net",
+        };
+    }
+
     pub fn new(
         base_address: u64,
         kind: VirtioDeviceInit,
