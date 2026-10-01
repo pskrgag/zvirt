@@ -82,9 +82,11 @@ pub const Net = struct {
     pub fn features() u32 {
         return (1 << c.VIRTIO_NET_F_MAC) |
             (1 << c.VIRTIO_NET_F_GUEST_CSUM) |
-            (1 << c.VIRTIO_NET_F_CSUM) | 
+            (1 << c.VIRTIO_NET_F_CSUM) |
             (1 << c.VIRTIO_NET_F_HOST_TSO4) |
-            (1 << c.VIRTIO_NET_F_GUEST_TSO4);
+            (1 << c.VIRTIO_NET_F_GUEST_TSO4) |
+            (1 << c.VIRTIO_NET_F_HOST_TSO6) |
+            (1 << c.VIRTIO_NET_F_GUEST_TSO6);
     }
 
     pub fn max_queues(self: *const Self) usize {

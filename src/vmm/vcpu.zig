@@ -112,7 +112,6 @@ pub const VCpu = struct {
                 continue;
             };
 
-
             const reason = self.cpu.exit_reason() catch {
                 log.warn("unknown exit reason", .{});
                 self.exit_reason.store(.InternalError, .monotonic);
