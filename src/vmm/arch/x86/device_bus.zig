@@ -32,13 +32,14 @@ pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
 pub fn handle_event(
     self: *Self,
     source: EventSource,
-    id: u29,
+    id: u10,
+    ctx: u19,
     fd: std.posix.fd_t,
     io: std.Io,
 ) !void {
     switch (source) {
         .io_bus => try self.io_bus.handle_event(id, io),
-        .virtio => try self.mmio_bus.handle_event(id, fd, io),
+        .virtio => try self.mmio_bus.handle_event(id, fd, ctx, io),
         .pci => {
             const bus = self.io_bus.pci_bus() orelse return error.UnknownPciDevice;
 
@@ -46,7 +47,7 @@ pub fn handle_event(
                 return error.UnknownPciDevice;
 
             const dev = bus.device(id) orelse return error.UnknownPciDevice;
-            try dev.handle_event(fd, io);
+            try dev.handle_event(fd, ctx, io);
         },
         else => unreachable,
     }

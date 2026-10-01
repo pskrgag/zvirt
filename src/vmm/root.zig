@@ -34,7 +34,8 @@ pub const EventSource = enum(u3) {
 };
 
 const EventToken = packed struct(u64) {
-    id: u29,
+    id: u10,
+    ctx: u19,
     fd: posix.fd_t,
     source: EventSource,
 };
@@ -208,7 +209,7 @@ pub const Vm = struct {
                 const value: stat.StatKind = @enumFromInt(field.value);
                 const name = @tagName(value);
 
-                std.debug.print("{s}: {d}\n", .{name, self.statistics.read(value)});
+                std.debug.print("{s}: {d}\n", .{ name, self.statistics.read(value) });
             }
         }
 
@@ -271,9 +272,17 @@ pub const Vm = struct {
         }
     }
 
-    pub fn register_fd(self: *Self, fd: posix.fd_t, id: u29, source: EventSource, edge: bool) !void {
+    pub fn register_fd(
+        self: *Self,
+        fd: posix.fd_t,
+        id: u10,
+        ctx: u19,
+        source: EventSource,
+        edge: bool,
+    ) !void {
         const token = EventToken{
             .id = id,
+            .ctx = ctx,
             .fd = fd,
             .source = source,
         };
@@ -296,7 +305,7 @@ pub const Vm = struct {
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {
-                try self.register_fd(cpu.eventfd.fd, @truncate(idx), .vcpu, false);
+                try self.register_fd(cpu.eventfd.fd, @truncate(idx), 0, .vcpu, false);
                 cpu.start(io);
             }
         }
@@ -304,7 +313,7 @@ pub const Vm = struct {
         var panic_cpu: ?u64 = null;
 
         while (true) {
-            var event_buffer: [1]EpollEvent = undefined;
+            var event_buffer: [1024]EpollEvent = undefined;
 
             const events = self.epoll.pwait(&event_buffer, -1, linux.sigfillset()) catch |e| {
                 if (e == error.Interrupted)
@@ -312,6 +321,7 @@ pub const Vm = struct {
 
                 return e;
             };
+
             for (events) |event| {
                 const token: EventToken = @bitCast(event.data);
 
@@ -332,6 +342,7 @@ pub const Vm = struct {
                         try self.archvm.device_bus.handle_event(
                             token.source,
                             token.id,
+                            token.ctx,
                             token.fd,
                             io,
                         );

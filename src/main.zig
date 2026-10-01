@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli");
 const zvirt = @import("zvirt");
 const Vm = zvirt.vmm.Vm;
@@ -43,6 +44,16 @@ var config = struct {
 }{};
 
 pub fn main(init: std.process.Init) !void {
+    // This query must work without --kernel or access to KVM.
+    var args = std.process.Args.Iterator.init(init.minimal.args);
+    _ = args.skip();
+    if (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--build-mode") and args.next() == null) {
+            try std.Io.File.stdout().writeStreamingAll(init.io, @tagName(builtin.mode) ++ "\n");
+            return;
+        }
+    }
+
     config.io = init.io;
     config.allocator = init.gpa;
 

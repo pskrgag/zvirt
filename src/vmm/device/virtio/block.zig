@@ -140,8 +140,8 @@ pub const Block = struct {
         return .{ .proccessed = consumed, .queue = 0 };
     }
 
-    pub fn handle_notify(self: *Self, fd: std.posix.fd_t, vm: *Vm, io: std.Io) !NotifyResult {
-        const token = try self.core.notified_queue(fd, io);
+    pub fn handle_notify(self: *Self, queue_idx: u19, vm: *Vm, io: std.Io) !NotifyResult {
+        const token = try self.core.notified_queue(queue_idx, io);
         defer self.core.unlock_queue(token, io);
 
         var reqs = try token.state.queue.kick(

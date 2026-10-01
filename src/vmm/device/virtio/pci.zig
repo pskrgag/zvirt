@@ -229,9 +229,9 @@ fn VirtioPci(comptime Device: type) type {
                 try self.pci.signal_vector(vector, io);
         }
 
-        pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
+        pub fn register_events(self: *Self, vm: *Vm, id: u10) !void {
             if (self.device.completion_event_source()) |event|
-                try vm.register_fd(event.fd, id, .pci, event.edge);
+                try vm.register_fd(event.fd, id, 0, .pci, event.edge);
 
             const bar = self.pci.bars[self.bar].?;
 
@@ -245,7 +245,7 @@ fn VirtioPci(comptime Device: type) type {
                     queue_idx,
                 );
 
-                try vm.register_fd(notifyfd.as_fd(), id, .pci, false);
+                try vm.register_fd(notifyfd.as_fd(), id, @truncate(queue_idx), .pci, false);
             }
         }
 
@@ -256,7 +256,7 @@ fn VirtioPci(comptime Device: type) type {
                 try self.signal_queue(res.queue, io);
         }
 
-        pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+        pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
             if (self.device.completion_event_source()) |comp_fd| {
                 if (comp_fd.fd == fd) {
                     try self.handle_completion_event(io);
@@ -264,7 +264,7 @@ fn VirtioPci(comptime Device: type) type {
                 }
             }
 
-            const result = try self.device.handle_notify(fd, self.pci.vm, io);
+            const result = try self.device.handle_notify(ctx, self.pci.vm, io);
             if (result.proccessed) {
                 try self.signal_queue(result.queue, io);
             }
@@ -309,15 +309,15 @@ pub const VirtioPciDevice = union(enum) {
 
     const Self = @This();
 
-    pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
+    pub fn register_events(self: *Self, vm: *Vm, id: u10) !void {
         switch (self.*) {
             inline else => |device| try device.register_events(vm, id),
         }
     }
 
-    pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+    pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
         switch (self.*) {
-            inline else => |device| try device.handle_event(fd, io),
+            inline else => |device| try device.handle_event(fd, ctx, io),
         }
     }
 

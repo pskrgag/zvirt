@@ -65,6 +65,13 @@ pub const Tap = struct {
             return error.TUNSETVNETHDRSZ;
         }
 
+        // Set GSO flags
+        res = linux.ioctl(fd, c.TUNSETOFFLOAD, c.TUN_F_CSUM | c.TUN_F_TSO4 | c.TUN_F_TSO6);
+        if (linux.errno(res) != .SUCCESS) {
+            log.err("Failed to TUNSETOFFLOAD: {}\n", .{linux.errno(res)});
+            return error.TUNSETOFFLOAD;
+        }
+
         return .{ .fd = fd };
     }
 

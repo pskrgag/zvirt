@@ -181,9 +181,9 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
+        pub fn register_events(self: *const Self, vm: *Vm, id: u10) !void {
             if (self.device.completion_event_source()) |event|
-                try vm.register_fd(event.fd, id, .virtio, event.edge);
+                try vm.register_fd(event.fd, id, 0, .virtio, event.edge);
 
             for (0..self.device.core.max_queues()) |queue_idx| {
                 const notifyfd = self.device.core.notifyfd_for_queue(queue_idx) catch @panic("should not happen");
@@ -195,11 +195,11 @@ pub fn VirtioMmio(comptime Device: type) type {
                     queue_idx,
                 );
 
-                try vm.register_fd(notifyfd.as_fd(), id, .virtio, false);
+                try vm.register_fd(notifyfd.as_fd(), id, @truncate(queue_idx), .virtio, false);
             }
         }
 
-        pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+        pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
             {
                 if (self.device.completion_event_source()) |comp_fd| {
                     if (comp_fd.fd == fd) {
@@ -213,7 +213,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                 }
             }
 
-            const res = try self.device.handle_notify(fd, self.vm, io);
+            const res = try self.device.handle_notify(ctx, self.vm, io);
             if (res.proccessed) {
                 try self.mutex.lock(io);
                 defer self.mutex.unlock(io);
@@ -338,13 +338,13 @@ pub const VirtioMmioDevice = union(enum) {
         };
     }
 
-    pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+    pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
         return switch (self.*) {
-            inline else => |device| device.handle_event(fd, io),
+            inline else => |device| device.handle_event(fd, ctx, io),
         };
     }
 
-    pub fn register_events(self: *const Self, vm: *Vm, id: u29) !void {
+    pub fn register_events(self: *const Self, vm: *Vm, id: u10) !void {
         return switch (self.*) {
             inline else => |device| device.register_events(vm, id),
         };

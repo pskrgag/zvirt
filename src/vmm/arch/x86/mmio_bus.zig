@@ -51,9 +51,10 @@ pub fn handle_event(
     self: *Self,
     id: u29,
     fd: std.posix.fd_t,
+    ctx: u19,
     io: std.Io,
 ) !void {
-    try self.virtio_devs.items[id].handle_event(fd, io);
+    try self.virtio_devs.items[id].handle_event(fd, ctx, io);
 }
 
 pub fn register_range(self: *Self, start: u64, size: usize, name: []const u8, mmio_range: MmioDevice) !void {

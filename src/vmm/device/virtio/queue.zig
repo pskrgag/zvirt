@@ -76,7 +76,7 @@ pub const Request = union(enum) {
 };
 
 pub const RequestChain = struct {
-    requests: [16]Request = undefined,
+    requests: [32]Request = undefined,
     count: usize = 0,
     head: u16,
     len: u32 = 0,
@@ -218,7 +218,7 @@ pub const VirtQueue = struct {
     }
 
     pub fn kick(self: *Self, mem: *GuestMemory, alloc: std.mem.Allocator) !std.ArrayList(RequestChain) {
-        var res = try std.ArrayList(RequestChain).initCapacity(alloc, 0);
+        var res = try std.ArrayList(RequestChain).initCapacity(alloc, 16);
         const slots = self.avail_ring_ptr.slots(self.elements);
 
         while (self.last_avail_idx != self.avail_ring_ptr.idx.load(.acquire)) {

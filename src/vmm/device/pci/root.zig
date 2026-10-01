@@ -166,17 +166,17 @@ pub const PciDevice = union(enum) {
 
     const Self = @This();
 
-    pub fn register_events(self: *Self, vm: *Vm, id: u29) !void {
+    pub fn register_events(self: *Self, vm: *Vm, id: u10) !void {
         switch (self.*) {
             .Brigde => {},
             .Virtio => |*dev| try dev.register_events(vm, id),
         }
     }
 
-    pub fn handle_event(self: *Self, fd: std.posix.fd_t, io: std.Io) !void {
+    pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
         switch (self.*) {
             .Brigde => return error.UnknownPciEvent,
-            .Virtio => |*dev| try dev.handle_event(fd, io),
+            .Virtio => |*dev| try dev.handle_event(fd, ctx, io),
         }
     }
 

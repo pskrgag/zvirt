@@ -20,7 +20,7 @@ pub const c = @cImport({
 const VIRTIO_NET_F_MAC = 1 << 5;
 
 const TxChain = struct {
-    buffer: [16]posix.iovec,
+    buffer: [32]posix.iovec,
     buffer_count: usize,
     head: u16,
 };
@@ -80,7 +80,11 @@ pub const Net = struct {
     const Self = @This();
 
     pub fn features() u32 {
-        return (1 << c.VIRTIO_NET_F_MAC) | (1 << c.VIRTIO_NET_F_GUEST_CSUM);
+        return (1 << c.VIRTIO_NET_F_MAC) |
+            (1 << c.VIRTIO_NET_F_GUEST_CSUM) |
+            (1 << c.VIRTIO_NET_F_CSUM) | 
+            (1 << c.VIRTIO_NET_F_HOST_TSO4) |
+            (1 << c.VIRTIO_NET_F_GUEST_TSO4);
     }
 
     pub fn max_queues(self: *const Self) usize {
@@ -213,8 +217,8 @@ pub const Net = struct {
         return .{ .proccessed = true, .queue = token.idx };
     }
 
-    pub fn handle_notify(self: *Self, fd: std.posix.fd_t, vm: *Vm, io: std.Io) !NotifyResult {
-        var token = try self.core.notified_queue(fd, io);
+    pub fn handle_notify(self: *Self, queue_idx: u19, vm: *Vm, io: std.Io) !NotifyResult {
+        var token = try self.core.notified_queue(queue_idx, io);
         defer self.core.unlock_queue(token, io);
 
         if (token.idx == 0) {
