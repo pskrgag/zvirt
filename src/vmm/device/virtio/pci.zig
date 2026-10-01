@@ -149,7 +149,7 @@ fn VirtioPci(comptime Device: type) type {
             const allocator = self.allocator;
 
             self.pci.deinit(alloc);
-            self.device.deinit(io);
+            self.device.deinit(alloc, io);
             allocator.destroy(self);
         }
 
@@ -336,13 +336,13 @@ pub const VirtioPciDevice = union(enum) {
                     vm.config.smp;
 
                 var device = try Block.new(block.path, num_queues, block.async, alloc, io);
-                errdefer device.deinit(io);
+                errdefer device.deinit(alloc, io);
 
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };
             },
             .NetDevice => |net| blk: {
                 var device = try Net.new(net.mac, net.iface, alloc);
-                errdefer device.deinit(io);
+                errdefer device.deinit(alloc, io);
 
                 break :blk .{ .net = try VirtioPci(Net).new(device, bus, vm, alloc) };
             },

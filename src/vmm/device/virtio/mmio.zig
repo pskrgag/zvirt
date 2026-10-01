@@ -223,9 +223,9 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        pub fn deinit(self: *Self, io: std.Io) void {
+        pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
             self.irqfd.deinit();
-            self.device.deinit(io);
+            self.device.deinit(alloc, io);
         }
     };
 }
@@ -255,7 +255,7 @@ pub const VirtioMmioDevice = union(enum) {
                     vm.config.smp;
 
                 var device = try Block.new(block.path, num_queues, block.async, alloc, io);
-                errdefer device.deinit(io);
+                errdefer device.deinit(alloc, io);
 
                 const transport = try alloc.create(VirtioMmio(Block));
                 errdefer alloc.destroy(transport);
@@ -270,7 +270,7 @@ pub const VirtioMmioDevice = union(enum) {
             },
             .NetDevice => |net| blk: {
                 var device = try Net.new(net.mac, net.iface, alloc);
-                errdefer device.deinit(io);
+                errdefer device.deinit(alloc, io);
 
                 const transport = try alloc.create(VirtioMmio(Net));
                 errdefer alloc.destroy(transport);
@@ -370,7 +370,7 @@ pub const VirtioMmioDevice = union(enum) {
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         switch (self.*) {
             inline else => |device| {
-                device.deinit(io);
+                device.deinit(alloc, io);
                 alloc.destroy(device);
             },
         }

@@ -100,7 +100,9 @@ pub const Block = struct {
         return .{ .fd = self.engine.event_source() orelse return null, .edge = false };
     }
 
-    pub fn deinit(self: *Self, io: std.Io) void {
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+        _ = alloc;
+
         self.core.deinit();
         self.engine.deinit();
         self.file.close(io);

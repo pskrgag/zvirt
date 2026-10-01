@@ -72,13 +72,6 @@ pub const Net = struct {
     tap: Tap,
     core: VirtioCore,
 
-    // TODO: maybe smth more specific? Like arena? But on the other hand, it's not clear when to
-    // flush it, since it's completely possible that at least one descriptor would be active, which
-    // may consume unbounded memory...
-    //
-    // It's possible to flush it when threshold is reached. Need to bench it.
-    alloc: std.mem.Allocator,
-
     pub const MMIO_TYPE = 0x1;
     pub const PCI_DEVICE_ID = 0x1041;
     pub const PCI_SUBCLASS = 0x0;
@@ -109,7 +102,6 @@ pub const Net = struct {
             .config = config,
             .tap = tap,
             .core = try VirtioCore.new(Self.features(), 2, alloc),
-            .alloc = alloc,
         };
     }
 
@@ -185,7 +177,6 @@ pub const Net = struct {
 
         // Consume pending in-kernel tap packets if any.
         const processed = try self.try_read_packets(token);
-
         return .{ .queue = token.idx, .proccessed = processed };
     }
 
@@ -243,11 +234,11 @@ pub const Net = struct {
         return std.mem.readInt(u32, std.mem.asBytes(&self.config)[offset..][0..4], .little);
     }
 
-    pub fn deinit(self: *Self, io: std.Io) void {
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         _ = io;
 
         self.core.deinit();
         self.tap.deinit();
-        self.tx_buffers.deinit(self.alloc);
+        self.tx_buffers.deinit(alloc);
     }
 };
