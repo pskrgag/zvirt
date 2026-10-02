@@ -54,7 +54,7 @@ pub fn Lazy(T: type) type {
     };
 }
 
-pub fn lazy(T: type, f: *const fn () anyerror!T) Lazy(T) {
+pub fn lazy(comptime T: type, f: *const fn () anyerror!T) Lazy(T) {
     return .{ .f = f, .state = Value(u32).init(PENDING), .result = undefined };
 }
 
