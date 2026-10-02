@@ -144,7 +144,9 @@ pub const Net = struct {
 
     // Called on edge triggered tap event. It might be the case that no tx_buffers were supplied.
     // In such case buffer is left in kernel queue
-    pub fn handle_completion_event(self: *Self, io: std.Io) !NotifyResult {
+    pub fn handle_completion_event(self: *Self, id: usize, io: std.Io) !NotifyResult {
+        _ = id;
+
         const tx = self.tx_queue(io) catch return .{ .queue = 0, .notify = false };
         defer self.core.unlock_queue(tx, io);
 
@@ -228,8 +230,8 @@ pub const Net = struct {
         }
     }
 
-    pub fn completion_event_source(self: *const Self) ?struct { fd: std.posix.fd_t, edge: bool } {
-        return .{ .fd = self.tap.fd, .edge = true };
+    pub fn completion_event_source(self: *const Self) ?[1]struct { fd: std.posix.fd_t, edge: bool } {
+        return .{.{ .fd = self.tap.fd, .edge = true }};
     }
 
     pub fn read_config(self: *const Self, offset: u32) u32 {

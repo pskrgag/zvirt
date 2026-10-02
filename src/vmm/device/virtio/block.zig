@@ -96,8 +96,8 @@ pub const Block = struct {
         };
     }
 
-    pub fn completion_event_source(self: *const Self) ?struct { fd: std.posix.fd_t, edge: bool } {
-        return .{ .fd = self.engine.event_source() orelse return null, .edge = false };
+    pub fn completion_event_source(self: *const Self) ?[1]struct { fd: std.posix.fd_t, edge: bool } {
+        return .{.{ .fd = self.engine.event_source() orelse return null, .edge = false }};
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
@@ -108,7 +108,8 @@ pub const Block = struct {
         self.file.close(io);
     }
 
-    pub fn handle_completion_event(self: *Self, io: std.Io) !NotifyResult {
+    pub fn handle_completion_event(self: *Self, id: usize, io: std.Io) !NotifyResult {
+        _ = id;
         _ = try self.engine.ack_event();
 
         // NOTE: support only one queue in async mode (do we need more? I don't think so)

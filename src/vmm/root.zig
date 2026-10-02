@@ -343,7 +343,6 @@ pub const Vm = struct {
                             token.source,
                             token.id,
                             token.ctx,
-                            token.fd,
                             io,
                         );
                     },

@@ -12,6 +12,6 @@ test {
     _ = @import("epoll.zig");
     _ = @import("eventfd.zig");
     _ = @import("idalloc.zig");
-    // _ = @import("tap.zig");
+    _ = @import("tap.zig");
     _ = @import("mac.zig");
 }

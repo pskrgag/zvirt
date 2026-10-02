@@ -172,8 +172,16 @@ pub fn VirtioMmio(comptime Device: type) type {
             }
         }
 
-        fn handle_completion_event(self: *Self, io: std.Io) !void {
-            const res = try self.device.handle_completion_event(io);
+        const FdCtx = packed struct(u19) {
+            kind: enum(u2) {
+                Completion = 0,
+                Queue = 1,
+            },
+            id: u17,
+        };
+
+        fn handle_completion_event(self: *Self, id: usize, io: std.Io) !void {
+            const res = try self.device.handle_completion_event(id, io);
 
             if (res.notify) {
                 self.irq_state |= VIRTIO_IRQ_USED_RING;
@@ -182,8 +190,12 @@ pub fn VirtioMmio(comptime Device: type) type {
         }
 
         pub fn register_events(self: *const Self, vm: *Vm, id: u10) !void {
-            if (self.device.completion_event_source()) |event|
-                try vm.register_fd(event.fd, id, 0, .virtio, event.edge);
+            if (self.device.completion_event_source()) |events| {
+                for (events, 0..) |event, i| {
+                    const ctx = FdCtx{ .kind = .Completion, .id = @truncate(i) };
+                    try vm.register_fd(event.fd, id, @bitCast(ctx), .virtio, event.edge);
+                }
+            }
 
             for (0..self.device.core.max_queues()) |queue_idx| {
                 const notifyfd = self.device.core.notifyfd_for_queue(queue_idx) catch @panic("should not happen");
@@ -195,31 +207,32 @@ pub fn VirtioMmio(comptime Device: type) type {
                     queue_idx,
                 );
 
-                try vm.register_fd(notifyfd.as_fd(), id, @truncate(queue_idx), .virtio, false);
+                const ctx = FdCtx{ .kind = .Queue, .id = @truncate(queue_idx) };
+                try vm.register_fd(notifyfd.as_fd(), id, @bitCast(ctx), .virtio, false);
             }
         }
 
-        pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
-            {
-                if (self.device.completion_event_source()) |comp_fd| {
-                    if (comp_fd.fd == fd) {
-                        // Don't take the mutex on hot path. Keep it under that if.
+        pub fn handle_event(self: *Self, ct: u19, io: std.Io) !void {
+            const ctx: FdCtx = @bitCast(ct);
+
+            switch (ctx.kind) {
+                .Completion => {
+                    try self.mutex.lock(io);
+                    defer self.mutex.unlock(io);
+
+                    try self.handle_completion_event(ctx.id, io);
+                },
+                .Queue => {
+                    const res = try self.device.handle_notify(ctx.id, self.vm, io);
+
+                    if (res.notify) {
                         try self.mutex.lock(io);
                         defer self.mutex.unlock(io);
 
-                        try self.handle_completion_event(io);
-                        return;
+                        self.irq_state |= VIRTIO_IRQ_USED_RING;
+                        try self.irqfd.notify();
                     }
-                }
-            }
-
-            const res = try self.device.handle_notify(ctx, self.vm, io);
-            if (res.notify) {
-                try self.mutex.lock(io);
-                defer self.mutex.unlock(io);
-
-                self.irq_state |= VIRTIO_IRQ_USED_RING;
-                try self.irqfd.notify();
+                },
             }
         }
 
@@ -338,9 +351,9 @@ pub const VirtioMmioDevice = union(enum) {
         };
     }
 
-    pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
+    pub fn handle_event(self: *Self, ctx: u19, io: std.Io) !void {
         return switch (self.*) {
-            inline else => |device| device.handle_event(fd, ctx, io),
+            inline else => |device| device.handle_event(ctx, io),
         };
     }
 

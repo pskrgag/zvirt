@@ -173,10 +173,10 @@ pub const PciDevice = union(enum) {
         }
     }
 
-    pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
+    pub fn handle_event(self: *Self, ctx: u19, io: std.Io) !void {
         switch (self.*) {
             .Brigde => return error.UnknownPciEvent,
-            .Virtio => |*dev| try dev.handle_event(fd, ctx, io),
+            .Virtio => |*dev| try dev.handle_event(ctx, io),
         }
     }
 

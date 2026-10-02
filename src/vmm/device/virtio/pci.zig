@@ -229,9 +229,22 @@ fn VirtioPci(comptime Device: type) type {
                 try self.pci.signal_vector(vector, io);
         }
 
+        const FdCtx = packed struct(u19) {
+            kind: enum(u2) {
+                Completion = 0,
+                Queue = 1,
+            },
+            id: u17,
+        };
+
         pub fn register_events(self: *Self, vm: *Vm, id: u10) !void {
-            if (self.device.completion_event_source()) |event|
-                try vm.register_fd(event.fd, id, 0, .pci, event.edge);
+            if (self.device.completion_event_source()) |events| {
+                for (events, 0..) |event, i| {
+                    const ctx = FdCtx{ .kind = .Completion, .id = @truncate(i) };
+
+                    try vm.register_fd(event.fd, id, @bitCast(ctx), .pci, event.edge);
+                }
+            }
 
             const bar = self.pci.bars[self.bar].?;
 
@@ -245,28 +258,29 @@ fn VirtioPci(comptime Device: type) type {
                     queue_idx,
                 );
 
-                try vm.register_fd(notifyfd.as_fd(), id, @truncate(queue_idx), .pci, false);
+                const ctx = FdCtx{ .kind = .Queue, .id = @truncate(queue_idx) };
+                try vm.register_fd(notifyfd.as_fd(), id, @bitCast(ctx), .pci, false);
             }
         }
 
-        fn handle_completion_event(self: *Self, io: std.Io) !void {
-            const res = try self.device.handle_completion_event(io);
+        fn handle_completion_event(self: *Self, id: usize, io: std.Io) !void {
+            const res = try self.device.handle_completion_event(id, io);
 
             if (res.notify)
                 try self.signal_queue(res.queue, io);
         }
 
-        pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
-            if (self.device.completion_event_source()) |comp_fd| {
-                if (comp_fd.fd == fd) {
-                    try self.handle_completion_event(io);
-                    return;
-                }
-            }
+        pub fn handle_event(self: *Self, ct: u19, io: std.Io) !void {
+            const ctx: FdCtx = @bitCast(ct);
 
-            const result = try self.device.handle_notify(ctx, self.pci.vm, io);
-            if (result.notify) {
-                try self.signal_queue(result.queue, io);
+            switch (ctx.kind) {
+                .Completion => try self.handle_completion_event(ctx.id, io),
+                .Queue => {
+                    const result = try self.device.handle_notify(ctx.id, self.pci.vm, io);
+                    if (result.notify) {
+                        try self.signal_queue(result.queue, io);
+                    }
+                },
             }
         }
 
@@ -315,9 +329,9 @@ pub const VirtioPciDevice = union(enum) {
         }
     }
 
-    pub fn handle_event(self: *Self, fd: std.posix.fd_t, ctx: u19, io: std.Io) !void {
+    pub fn handle_event(self: *Self, ctx: u19, io: std.Io) !void {
         switch (self.*) {
-            inline else => |device| try device.handle_event(fd, ctx, io),
+            inline else => |device| try device.handle_event(ctx, io),
         }
     }
 
