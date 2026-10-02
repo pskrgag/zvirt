@@ -132,7 +132,7 @@ pub const Net = struct {
             const header: *c.virtio_net_hdr_mrg_rxbuf = @ptrCast(@alignCast(ch.buffer[0].base));
             header.num_buffers = 1;
 
-            token.state.queue.push_used(ch.head, @truncate(frame_size));
+            token.queue.push_used(ch.head, @truncate(frame_size));
             handled = true;
 
             const tmp = self.tx_buffers.pop_chain();
@@ -145,7 +145,7 @@ pub const Net = struct {
     // Called on edge triggered tap event. It might be the case that no tx_buffers were supplied.
     // In such case buffer is left in kernel queue
     pub fn handle_completion_event(self: *Self, io: std.Io) !NotifyResult {
-        const tx = try self.tx_queue(io);
+        const tx = self.tx_queue(io) catch return .{ .queue = 0, .proccessed = false };
         defer self.core.unlock_queue(tx, io);
 
         const processed = try self.try_read_packets(&tx);
@@ -153,13 +153,13 @@ pub const Net = struct {
     }
 
     fn proccess_rx_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
-        var reqs = try token.state.queue.kick(
+        var reqs = try token.queue.kick(
             vm.memory,
-            token.state.alloc.allocator(),
+            token.alloc.allocator(),
         );
 
-        defer _ = token.state.alloc.reset(.retain_capacity);
-        defer reqs.deinit(token.state.alloc.allocator());
+        defer _ = token.alloc.reset(.retain_capacity);
+        defer reqs.deinit(token.alloc.allocator());
 
         for (reqs.items) |ch| {
             const rqs = ch.get_requests();
@@ -185,13 +185,13 @@ pub const Net = struct {
     }
 
     fn proccess_tx_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
-        var reqs = try token.state.queue.kick(
+        var reqs = try token.queue.kick(
             vm.memory,
-            token.state.alloc.allocator(),
+            token.alloc.allocator(),
         );
 
-        defer _ = token.state.alloc.reset(.retain_capacity);
-        defer reqs.deinit(token.state.alloc.allocator());
+        defer _ = token.alloc.reset(.retain_capacity);
+        defer reqs.deinit(token.alloc.allocator());
 
         for (reqs.items) |ch| {
             const rqs = ch.get_requests();
@@ -207,7 +207,7 @@ pub const Net = struct {
             const res = try self.tap.writev(buffers[0..rqs.len]);
             _ = res;
 
-            token.state.queue.push_used(
+            token.queue.push_used(
                 ch.head,
                 0,
             );

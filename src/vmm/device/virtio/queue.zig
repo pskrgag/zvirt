@@ -105,17 +105,9 @@ pub const MAX_QUEUE_ELEMENTS = 256;
 
 pub const VirtQueue = struct {
     is_ready: u32 = 0,
-    elements: u32 = MAX_QUEUE_ELEMENTS,
 
     last_avail_idx: u16 = 0,
     next_used_idx: u16 = 0,
-
-    // Invalid PA
-    //
-    // TODO: introduce PA abstraction one day...
-    desc_ring: u64 = std.math.maxInt(u64),
-    available_ring: u64 = std.math.maxInt(u64),
-    used_ring: u64 = std.math.maxInt(u64),
 
     used_ring_ptr: *UsedRingHeader = undefined,
     descr_ring_ptr: []Descriptor = undefined,
@@ -123,18 +115,13 @@ pub const VirtQueue = struct {
 
     const Self = @This();
 
-    fn get_used_ring(self: *Self, mem: *GuestMemory) ?*UsedRingHeader {
-        const used_ring_size = self.elements * @sizeOf(UsedElement) +
+    fn get_used_ring(elements: usize, mem: *GuestMemory, address: u64) ?*UsedRingHeader {
+        const used_ring_size = elements * @sizeOf(UsedElement) +
             @sizeOf(UsedRingHeader);
-        const ring = mem.as_slice(self.used_ring, used_ring_size) orelse return null;
+        const ring = mem.as_slice(address, used_ring_size) orelse return null;
         const header: *UsedRingHeader = @ptrCast(@alignCast(ring.ptr));
 
         return header;
-    }
-
-    pub fn set_elements(self: *Self, val: u32) !void {
-        if (val <= MAX_QUEUE_ELEMENTS and std.math.isPowerOfTwo(val))
-            self.elements = val;
     }
 
     pub fn push_used(
@@ -143,8 +130,8 @@ pub const VirtQueue = struct {
         written_len: u32,
     ) void {
         const header = self.used_ring_ptr;
-        const slots = header.slots(self.elements);
-        const slot = self.next_used_idx % @as(u16, @intCast(self.elements));
+        const slots = header.slots(self.descr_ring_ptr.len);
+        const slot = self.next_used_idx % @as(u16, @intCast(self.descr_ring_ptr.len));
 
         slots[slot] = .{
             .id = descriptor_head,
@@ -155,20 +142,20 @@ pub const VirtQueue = struct {
         header.idx.store(self.next_used_idx, .release);
     }
 
-    fn avail_ring(self: *Self, mem: *GuestMemory) ?*AvailableRing {
-        const avail_ring_size = self.elements * @sizeOf(u16) + @sizeOf(AvailableRing);
-        const ring = mem.as_slice(self.available_ring, avail_ring_size) orelse return null;
+    fn avail_ring(elements: usize, mem: *GuestMemory, address: u64) ?*AvailableRing {
+        const avail_ring_size = elements * @sizeOf(u16) + @sizeOf(AvailableRing);
+        const ring = mem.as_slice(address, avail_ring_size) orelse return null;
         const header: *AvailableRing = @ptrCast(@alignCast(ring.ptr));
 
         return header;
     }
 
-    fn descr_ring(self: *Self, mem: *GuestMemory) ?[]Descriptor {
-        const dring_size = self.elements * @sizeOf(Descriptor);
-        const ring = mem.as_slice(self.desc_ring, dring_size) orelse return null;
+    fn descr_ring(elements: usize, mem: *GuestMemory, address: u64) ?[]Descriptor {
+        const dring_size = elements * @sizeOf(Descriptor);
+        const ring = mem.as_slice(address, dring_size) orelse return null;
         const header: [*]Descriptor = @ptrCast(@alignCast(ring.ptr));
 
-        return header[0..self.elements];
+        return header[0..elements];
     }
 
     fn process_descriptor_chain(
@@ -177,12 +164,12 @@ pub const VirtQueue = struct {
         mem: *GuestMemory,
         dring: []Descriptor,
     ) ?RequestChain {
-        var remaining = self.elements;
+        var remaining = self.descr_ring_ptr.len;
         var descriptor_idx = head;
         var chain = RequestChain{ .head = head };
 
         while (true) {
-            if (descriptor_idx >= self.elements)
+            if (descriptor_idx >= self.descr_ring_ptr.len)
                 return null;
 
             if (remaining == 0)
@@ -213,22 +200,28 @@ pub const VirtQueue = struct {
         return chain;
     }
 
-    pub fn ready(self: *Self, mem: *GuestMemory, is_ready: u32) !void {
-        if (is_ready != 0) {
-            self.avail_ring_ptr = self.avail_ring(mem) orelse return error.InvalidAddr;
-            self.descr_ring_ptr = self.descr_ring(mem) orelse return error.InvalidAddr;
-            self.used_ring_ptr = self.get_used_ring(mem) orelse return error.InvalidAddr;
-        }
-
-        self.is_ready = is_ready;
+    pub fn new(
+        mem: *GuestMemory,
+        is_ready: u32,
+        desc_ring: u64,
+        available_ring: u64,
+        used_ring: u64,
+        elements: usize,
+    ) !Self {
+        return .{
+            .avail_ring_ptr = Self.avail_ring(elements, mem, available_ring) orelse return error.InvalidAddr,
+            .descr_ring_ptr = Self.descr_ring(elements, mem, desc_ring) orelse return error.InvalidAddr,
+            .used_ring_ptr = Self.get_used_ring(elements, mem, used_ring) orelse return error.InvalidAddr,
+            .is_ready = is_ready,
+        };
     }
 
     pub fn kick(self: *Self, mem: *GuestMemory, alloc: std.mem.Allocator) !std.ArrayList(RequestChain) {
         var res = try std.ArrayList(RequestChain).initCapacity(alloc, 16);
-        const slots = self.avail_ring_ptr.slots(self.elements);
+        const slots = self.avail_ring_ptr.slots(self.descr_ring_ptr.len);
 
         while (self.last_avail_idx != self.avail_ring_ptr.idx.load(.acquire)) {
-            const slot = self.last_avail_idx % self.elements;
+            const slot = self.last_avail_idx % self.descr_ring_ptr.len;
             const descriptor_head = slots[slot];
 
             self.last_avail_idx +%= 1;
@@ -251,14 +244,9 @@ test "kick returns a descriptor chain in descriptor order" {
     defer mem.deinit(alloc);
     try mem.add(0, &ram, false, alloc);
 
-    var queue = VirtQueue{
-        .elements = 8,
-        .desc_ring = 0x100,
-        .available_ring = 0x200,
-        .used_ring = 0x300,
-    };
+    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8);
 
-    const descriptors = queue.descr_ring(mem).?;
+    const descriptors = queue.descr_ring_ptr;
     descriptors[0] = .{
         .address = 0x400,
         .length = 16,
@@ -278,12 +266,10 @@ test "kick returns a descriptor chain in descriptor order" {
         .next = 0,
     };
 
-    const available = queue.avail_ring(mem).?;
+    const available = queue.avail_ring_ptr;
     available.* = .{ .flags = 0, .idx = Value(u16).init(0) };
-    available.slots(queue.elements)[0] = 0;
+    available.slots(queue.descr_ring_ptr.len)[0] = 0;
     available.idx.store(1, .release);
-
-    try queue.ready(mem, 1);
 
     var chains = try queue.kick(mem, alloc);
     defer chains.deinit(alloc);
@@ -309,24 +295,17 @@ test "kick consumes each available entry once" {
     defer mem.deinit(alloc);
     try mem.add(0, &ram, false, alloc);
 
-    var queue = VirtQueue{
-        .elements = 8,
-        .desc_ring = 0x100,
-        .available_ring = 0x200,
-        .used_ring = 0x300,
-    };
+    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8);
 
-    const descriptors = queue.descr_ring(mem).?;
+    const descriptors = queue.descr_ring_ptr;
     descriptors[0] = .{ .address = 0x400, .length = 4, .flags = 0, .next = 0 };
     descriptors[1] = .{ .address = 0x500, .length = 8, .flags = 0, .next = 0 };
 
-    const available = queue.avail_ring(mem).?;
+    const available = queue.avail_ring_ptr;
     available.* = .{ .flags = 0, .idx = Value(u16).init(0) };
-    available.slots(queue.elements)[0] = 0;
-    available.slots(queue.elements)[1] = 1;
+    available.slots(queue.descr_ring_ptr.len)[0] = 0;
+    available.slots(queue.descr_ring_ptr.len)[1] = 1;
     available.idx.store(2, .release);
-
-    try queue.ready(mem, 1);
 
     var first = try queue.kick(mem, alloc);
     defer first.deinit(alloc);
@@ -348,25 +327,18 @@ test "push_used publishes used elements and advances idx" {
     defer mem.deinit(alloc);
     try mem.add(0, &ram, false, alloc);
 
-    var queue = VirtQueue{
-        .elements = 8,
-        .desc_ring = 0x100,
-        .available_ring = 0x200,
-        .used_ring = 0x300,
-    };
+    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8);
 
-    try queue.ready(mem, 1);
-
-    const used = queue.get_used_ring(mem).?;
+    const used = queue.used_ring_ptr;
     used.* = .{ .flags = 0, .idx = Value(u16).init(0) };
 
-    try std.testing.expect(queue.push_used(7, 513));
+    queue.push_used(7, 513);
     try std.testing.expectEqual(@as(u16, 1), used.idx.load(.acquire));
-    try std.testing.expectEqual(@as(u32, 7), used.slots(queue.elements)[0].id);
-    try std.testing.expectEqual(@as(u32, 513), used.slots(queue.elements)[0].len);
+    try std.testing.expectEqual(@as(u32, 7), used.slots(queue.descr_ring_ptr.len)[0].id);
+    try std.testing.expectEqual(@as(u32, 513), used.slots(queue.descr_ring_ptr.len)[0].len);
 
-    try std.testing.expect(queue.push_used(3, 1));
+    queue.push_used(3, 1);
     try std.testing.expectEqual(@as(u16, 2), used.idx.load(.acquire));
-    try std.testing.expectEqual(@as(u32, 3), used.slots(queue.elements)[1].id);
-    try std.testing.expectEqual(@as(u32, 1), used.slots(queue.elements)[1].len);
+    try std.testing.expectEqual(@as(u32, 3), used.slots(queue.descr_ring_ptr.len)[1].id);
+    try std.testing.expectEqual(@as(u32, 1), used.slots(queue.descr_ring_ptr.len)[1].len);
 }

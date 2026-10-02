@@ -117,13 +117,11 @@ pub const Block = struct {
         var consumed = false;
         var batch: usize = 0;
 
-        try self.core.virt_queues[0].lock.lock(io);
-        defer self.core.virt_queues[0].lock.unlock(io);
+        const token = try self.core.get_queue(0, io);
+        defer self.core.unlock_queue(token, io);
 
         while (try self.pop_completion()) |async_result| {
-            const state = &self.core.virt_queues[0];
-
-            state.queue.push_used(
+            token.queue.push_used(
                 async_result.head,
                 async_result.len,
             );
@@ -143,13 +141,13 @@ pub const Block = struct {
         const token = try self.core.notified_queue(queue_idx, io);
         defer self.core.unlock_queue(token, io);
 
-        var reqs = try token.state.queue.kick(
+        var reqs = try token.queue.kick(
             vm.memory,
-            token.state.alloc.allocator(),
+            token.alloc.allocator(),
         );
 
-        defer _ = token.state.alloc.reset(.retain_capacity);
-        defer reqs.deinit(token.state.alloc.allocator());
+        defer _ = token.alloc.reset(.retain_capacity);
+        defer reqs.deinit(token.alloc.allocator());
 
         self.proccess_requests(reqs.items, io) catch {
             @panic("todo");
@@ -160,7 +158,7 @@ pub const Block = struct {
         for (reqs.items) |req| {
             // Len == 0 means that request will be handled in async
             if (req.len != 0) {
-                token.state.queue.push_used(
+                token.queue.push_used(
                     req.head,
                     req.len,
                 );

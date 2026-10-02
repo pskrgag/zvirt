@@ -9,6 +9,7 @@ const GuestMemory = @import("../../memory.zig").GuestMemory;
 const Mutex = std.Io.Mutex;
 const EventFd = @import("utils").EventFd.EventFd;
 const Mac = @import("utils").Mac;
+const queue = @import("queue.zig");
 
 const log = std.log.scoped(.virtio);
 
@@ -51,7 +52,16 @@ fn set_high(value: *u64, high: u32) void {
 
 const VirtQueueState = struct {
     lock: Mutex = .init,
-    queue: VirtQueue = .{},
+    queue: ?VirtQueue = null,
+
+    // Invalid PA
+    //
+    // TODO: introduce PA abstraction one day...
+    desc_ring: u64 = std.math.maxInt(u64),
+    available_ring: u64 = std.math.maxInt(u64),
+    used_ring: u64 = std.math.maxInt(u64),
+    elements: u32 = queue.MAX_QUEUE_ELEMENTS,
+
     alloc: std.heap.ArenaAllocator,
     notifyfd: EventFd,
 };
@@ -62,7 +72,9 @@ pub const NotifyResult = struct {
 };
 
 pub const VirtQueueToken = struct {
-    state: *VirtQueueState,
+    queue: *VirtQueue,
+    alloc: *std.heap.ArenaAllocator,
+
     idx: usize,
 };
 
@@ -121,7 +133,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        return state.queue.is_ready;
+        return @intFromBool(state.queue != null);
     }
 
     pub fn get_queue_num(self: *Self, idx: usize, io: std.Io) !u32 {
@@ -132,7 +144,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        return state.queue.elements;
+        return state.elements;
     }
 
     pub fn set_queue_ready(self: *Self, idx: usize, memory: *GuestMemory, val: u32, io: std.Io) !void {
@@ -143,7 +155,19 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        try state.queue.ready(memory, val);
+        if (val == 0) {
+            state.queue = null;
+            return;
+        }
+
+        state.queue = try VirtQueue.new(
+            memory,
+            val,
+            state.desc_ring,
+            state.available_ring,
+            state.used_ring,
+            state.elements,
+        );
     }
 
     pub fn set_queue_num(self: *Self, idx: usize, val: u32, io: std.Io) !void {
@@ -154,7 +178,9 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        try state.queue.set_elements(val);
+        if (val <= queue.MAX_QUEUE_ELEMENTS and std.math.isPowerOfTwo(val)) {
+            state.elements = val;
+        }
     }
 
     pub fn set_queue_desc_low(self: *Self, idx: usize, val: u32, io: std.Io) !void {
@@ -165,7 +191,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        set_low(&state.queue.desc_ring, val);
+        set_low(&state.desc_ring, val);
     }
 
     pub fn set_queue_desc_high(self: *Self, idx: usize, val: u32, io: std.Io) !void {
@@ -176,7 +202,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        set_high(&state.queue.desc_ring, val);
+        set_high(&state.desc_ring, val);
     }
 
     pub fn set_queue_avail_low(self: *Self, idx: usize, val: u32, io: std.Io) !void {
@@ -187,7 +213,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        set_low(&state.queue.available_ring, val);
+        set_low(&state.available_ring, val);
     }
 
     pub fn set_queue_avail_high(self: *Self, idx: usize, val: u32, io: std.Io) !void {
@@ -198,7 +224,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        set_high(&state.queue.available_ring, val);
+        set_high(&state.available_ring, val);
     }
 
     pub fn set_queue_used_low(self: *Self, idx: usize, val: u32, io: std.Io) !void {
@@ -209,7 +235,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        set_low(&state.queue.used_ring, val);
+        set_low(&state.used_ring, val);
     }
 
     pub fn set_queue_used_high(self: *Self, idx: usize, val: u32, io: std.Io) !void {
@@ -220,7 +246,7 @@ pub const VirtioCore = struct {
         try state.lock.lock(io);
         defer state.lock.unlock(io);
 
-        set_high(&state.queue.used_ring, val);
+        set_high(&state.used_ring, val);
     }
 
     pub fn update_driver_feats(self: *Self, bits: u32, high: bool) void {
@@ -244,15 +270,24 @@ pub const VirtioCore = struct {
     }
 
     pub fn get_queue(self: *Self, idx: usize, io: std.Io) !VirtQueueToken {
+        if (idx >= self.max_queues()) {
+            return error.InvalidQueue;
+        }
+
         const state = &self.virt_queues[idx];
 
         try state.lock.lock(io);
-        return .{ .state = state, .idx = idx };
+        errdefer state.lock.unlock(io);
+
+        if (state.queue) |*live_queue| {
+            return .{ .queue = live_queue, .alloc = &state.alloc, .idx = idx };
+        }
+
+        return error.QueueNotReady;
     }
 
     pub fn unlock_queue(self: *Self, token: VirtQueueToken, io: std.Io) void {
-        _ = self;
-        token.state.lock.unlock(io);
+        self.virt_queues[token.idx].lock.unlock(io);
     }
 
     pub fn max_queues(self: *const Self) usize {
