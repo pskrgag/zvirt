@@ -15,6 +15,7 @@ const log = std.log.scoped(.virtio_net);
 
 pub const c = @cImport({
     @cInclude("linux/virtio_net.h");
+    @cInclude("linux/virtio_ring.h");
 });
 
 const VIRTIO_NET_F_MAC = 1 << 5;
@@ -120,7 +121,7 @@ pub const Net = struct {
     }
 
     fn try_read_packets(self: *Self, token: *const VirtQueueToken) !bool {
-        var handled = false;
+        var notify = false;
 
         while (self.tx_buffers.peek_chain()) |ch| {
             std.debug.assert(ch.buffer_count != 0);
@@ -132,24 +133,23 @@ pub const Net = struct {
             const header: *c.virtio_net_hdr_mrg_rxbuf = @ptrCast(@alignCast(ch.buffer[0].base));
             header.num_buffers = 1;
 
-            token.queue.push_used(ch.head, @truncate(frame_size));
-            handled = true;
+            notify |= token.queue.push_used(ch.head, @truncate(frame_size));
 
             const tmp = self.tx_buffers.pop_chain();
             std.debug.assert(tmp != null);
         }
 
-        return handled;
+        return notify;
     }
 
     // Called on edge triggered tap event. It might be the case that no tx_buffers were supplied.
     // In such case buffer is left in kernel queue
     pub fn handle_completion_event(self: *Self, io: std.Io) !NotifyResult {
-        const tx = self.tx_queue(io) catch return .{ .queue = 0, .proccessed = false };
+        const tx = self.tx_queue(io) catch return .{ .queue = 0, .notify = false };
         defer self.core.unlock_queue(tx, io);
 
         const processed = try self.try_read_packets(&tx);
-        return .{ .proccessed = processed, .queue = TX_QUEUE };
+        return .{ .notify = processed, .queue = TX_QUEUE };
     }
 
     fn proccess_rx_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
@@ -181,7 +181,7 @@ pub const Net = struct {
 
         // Consume pending in-kernel tap packets if any.
         const processed = try self.try_read_packets(token);
-        return .{ .queue = token.idx, .proccessed = processed };
+        return .{ .queue = token.idx, .notify = processed };
     }
 
     fn proccess_tx_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
@@ -189,6 +189,7 @@ pub const Net = struct {
             vm.memory,
             token.alloc.allocator(),
         );
+        var notify = false;
 
         defer _ = token.alloc.reset(.retain_capacity);
         defer reqs.deinit(token.alloc.allocator());
@@ -207,13 +208,13 @@ pub const Net = struct {
             const res = try self.tap.writev(buffers[0..rqs.len]);
             _ = res;
 
-            token.queue.push_used(
+            notify |= token.queue.push_used(
                 ch.head,
                 0,
             );
         }
 
-        return .{ .proccessed = true, .queue = token.idx };
+        return .{ .notify = notify, .queue = token.idx };
     }
 
     pub fn handle_notify(self: *Self, queue_idx: u19, vm: *Vm, io: std.Io) !NotifyResult {

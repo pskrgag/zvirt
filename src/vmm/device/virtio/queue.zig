@@ -7,6 +7,8 @@ const std = @import("std");
 const GuestMemory = @import("../../memory.zig").GuestMemory;
 const Value = std.atomic.Value;
 
+const log = std.log.scoped(.virtio_queue);
+
 const DESC_F_NEXT: u16 = 1;
 const DESC_F_WRITE: u16 = 2;
 const DESC_F_INDIRECT: u16 = 4;
@@ -29,6 +31,13 @@ const AvailableRing = extern struct {
 
         return entries[0..elems];
     }
+
+    fn used_event(self: *AvailableRing, elems: usize) u16 {
+        const offset = @sizeOf(AvailableRing) + @sizeOf(u16) * elems;
+        const ptr: *u16 = @ptrFromInt(@intFromPtr(self) + offset);
+
+        return @atomicLoad(u16, ptr, .monotonic);
+    }
 };
 
 const UsedRingHeader = extern struct {
@@ -43,11 +52,11 @@ const UsedRingHeader = extern struct {
         return entries[0..elems];
     }
 
-    fn used_event(self: *UsedRingHeader, elems: usize) u16 {
+    fn set_avail_event(self: *UsedRingHeader, elems: usize, elem: u16) void {
         const offset = @sizeOf(UsedRingHeader) + @sizeOf(UsedElement) * elems;
-        const ptr: *u16 = @intFromPtr(self) + offset;
+        const ptr: *u16 = @ptrFromInt(@intFromPtr(self) + offset);
 
-        return @atomicLoad(u16, ptr, .monotonic);
+        return @atomicStore(u16, ptr, elem, .seq_cst);
     }
 };
 
@@ -108,6 +117,7 @@ pub const VirtQueue = struct {
 
     last_avail_idx: u16 = 0,
     next_used_idx: u16 = 0,
+    supression: bool,
 
     used_ring_ptr: *UsedRingHeader = undefined,
     descr_ring_ptr: []Descriptor = undefined,
@@ -115,20 +125,59 @@ pub const VirtQueue = struct {
 
     const Self = @This();
 
-    fn get_used_ring(elements: usize, mem: *GuestMemory, address: u64) ?*UsedRingHeader {
-        const used_ring_size = elements * @sizeOf(UsedElement) +
-            @sizeOf(UsedRingHeader);
-        const ring = mem.as_slice(address, used_ring_size) orelse return null;
-        const header: *UsedRingHeader = @ptrCast(@alignCast(ring.ptr));
+    pub fn new(
+        mem: *GuestMemory,
+        is_ready: u32,
+        desc_ring: u64,
+        available_ring: u64,
+        _used_ring: u64,
+        elements: usize,
+        supression: bool,
+    ) !Self {
+        return .{
+            .avail_ring_ptr = Self.avail_ring(
+                elements,
+                mem,
+                available_ring,
+                supression,
+            ) orelse return error.InvalidAddr,
+            .descr_ring_ptr = Self.descr_ring(
+                elements,
+                mem,
+                desc_ring,
+            ) orelse return error.InvalidAddr,
+            .used_ring_ptr = Self.used_ring(
+                elements,
+                mem,
+                _used_ring,
+                supression,
+            ) orelse return error.InvalidAddr,
+            .is_ready = is_ready,
+            .supression = supression,
+        };
+    }
 
-        return header;
+    fn used_ring(elements: usize, mem: *GuestMemory, address: u64, suppression: bool) ?*UsedRingHeader {
+        const used_ring_size = elements * @sizeOf(UsedElement) +
+            @sizeOf(UsedRingHeader) +
+            @as(usize, @intFromBool(suppression)) * @sizeOf(u16);
+
+        const ring = mem.as_slice(address, used_ring_size) orelse return null;
+        return @ptrCast(@alignCast(ring.ptr));
+    }
+
+    fn maybe_notify_used(self: *Self, idx: usize) bool {
+        if (!self.supression)
+            return true;
+
+        return idx == self.avail_ring_ptr.used_event(self.descr_ring_ptr.len);
     }
 
     pub fn push_used(
         self: *Self,
         descriptor_head: u16,
         written_len: u32,
-    ) void {
+    ) bool {
         const header = self.used_ring_ptr;
         const slots = header.slots(self.descr_ring_ptr.len);
         const slot = self.next_used_idx % @as(u16, @intCast(self.descr_ring_ptr.len));
@@ -138,16 +187,20 @@ pub const VirtQueue = struct {
             .len = written_len,
         };
 
+        const old_idx = self.next_used_idx;
+
         self.next_used_idx +%= 1;
-        header.idx.store(self.next_used_idx, .release);
+        header.idx.store(self.next_used_idx, .seq_cst);
+        return self.maybe_notify_used(old_idx);
     }
 
-    fn avail_ring(elements: usize, mem: *GuestMemory, address: u64) ?*AvailableRing {
-        const avail_ring_size = elements * @sizeOf(u16) + @sizeOf(AvailableRing);
+    fn avail_ring(elements: usize, mem: *GuestMemory, address: u64, supression: bool) ?*AvailableRing {
+        const avail_ring_size = elements * @sizeOf(u16) +
+            @sizeOf(AvailableRing) +
+            @as(usize, @intFromBool(supression)) * @sizeOf(u16);
         const ring = mem.as_slice(address, avail_ring_size) orelse return null;
-        const header: *AvailableRing = @ptrCast(@alignCast(ring.ptr));
 
-        return header;
+        return @ptrCast(@alignCast(ring.ptr));
     }
 
     fn descr_ring(elements: usize, mem: *GuestMemory, address: u64) ?[]Descriptor {
@@ -200,37 +253,32 @@ pub const VirtQueue = struct {
         return chain;
     }
 
-    pub fn new(
-        mem: *GuestMemory,
-        is_ready: u32,
-        desc_ring: u64,
-        available_ring: u64,
-        used_ring: u64,
-        elements: usize,
-    ) !Self {
-        return .{
-            .avail_ring_ptr = Self.avail_ring(elements, mem, available_ring) orelse return error.InvalidAddr,
-            .descr_ring_ptr = Self.descr_ring(elements, mem, desc_ring) orelse return error.InvalidAddr,
-            .used_ring_ptr = Self.get_used_ring(elements, mem, used_ring) orelse return error.InvalidAddr,
-            .is_ready = is_ready,
-        };
+    fn queue_elements(self: *const Self) usize {
+        return self.descr_ring_ptr.len;
     }
 
     pub fn kick(self: *Self, mem: *GuestMemory, alloc: std.mem.Allocator) !std.ArrayList(RequestChain) {
         var res = try std.ArrayList(RequestChain).initCapacity(alloc, 16);
-        const slots = self.avail_ring_ptr.slots(self.descr_ring_ptr.len);
+        const slots = self.avail_ring_ptr.slots(self.queue_elements());
 
-        while (self.last_avail_idx != self.avail_ring_ptr.idx.load(.acquire)) {
-            const slot = self.last_avail_idx % self.descr_ring_ptr.len;
-            const descriptor_head = slots[slot];
+        while (true) {
+            while (self.last_avail_idx != self.avail_ring_ptr.idx.load(.acquire)) {
+                const slot = self.last_avail_idx % self.descr_ring_ptr.len;
+                const descriptor_head = slots[slot];
 
-            self.last_avail_idx +%= 1;
+                self.last_avail_idx +%= 1;
 
-            try res.append(alloc, self.process_descriptor_chain(
-                descriptor_head,
-                mem,
-                self.descr_ring_ptr,
-            ).?);
+                try res.append(alloc, self.process_descriptor_chain(
+                    descriptor_head,
+                    mem,
+                    self.descr_ring_ptr,
+                ).?);
+            }
+
+            self.used_ring_ptr.set_avail_event(self.queue_elements(), self.last_avail_idx);
+
+            if (self.avail_ring_ptr.idx.load(.monotonic) == self.last_avail_idx)
+                break;
         }
 
         return res;
@@ -244,7 +292,7 @@ test "kick returns a descriptor chain in descriptor order" {
     defer mem.deinit(alloc);
     try mem.add(0, &ram, false, alloc);
 
-    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8);
+    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8, false);
 
     const descriptors = queue.descr_ring_ptr;
     descriptors[0] = .{
@@ -295,7 +343,7 @@ test "kick consumes each available entry once" {
     defer mem.deinit(alloc);
     try mem.add(0, &ram, false, alloc);
 
-    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8);
+    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8, false);
 
     const descriptors = queue.descr_ring_ptr;
     descriptors[0] = .{ .address = 0x400, .length = 4, .flags = 0, .next = 0 };
@@ -327,17 +375,17 @@ test "push_used publishes used elements and advances idx" {
     defer mem.deinit(alloc);
     try mem.add(0, &ram, false, alloc);
 
-    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8);
+    var queue = try VirtQueue.new(mem, 1, 0x100, 0x200, 0x300, 8, false);
 
     const used = queue.used_ring_ptr;
     used.* = .{ .flags = 0, .idx = Value(u16).init(0) };
 
-    queue.push_used(7, 513);
+    try std.testing.expect(queue.push_used(7, 513));
     try std.testing.expectEqual(@as(u16, 1), used.idx.load(.acquire));
     try std.testing.expectEqual(@as(u32, 7), used.slots(queue.descr_ring_ptr.len)[0].id);
     try std.testing.expectEqual(@as(u32, 513), used.slots(queue.descr_ring_ptr.len)[0].len);
 
-    queue.push_used(3, 1);
+    try std.testing.expect(queue.push_used(3, 1));
     try std.testing.expectEqual(@as(u16, 2), used.idx.load(.acquire));
     try std.testing.expectEqual(@as(u32, 3), used.slots(queue.descr_ring_ptr.len)[1].id);
     try std.testing.expectEqual(@as(u32, 1), used.slots(queue.descr_ring_ptr.len)[1].len);

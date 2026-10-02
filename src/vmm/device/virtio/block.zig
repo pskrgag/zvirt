@@ -118,10 +118,12 @@ pub const Block = struct {
         var batch: usize = 0;
 
         const token = try self.core.get_queue(0, io);
+        var notify = false;
+
         defer self.core.unlock_queue(token, io);
 
         while (try self.pop_completion()) |async_result| {
-            token.queue.push_used(
+            notify |= token.queue.push_used(
                 async_result.head,
                 async_result.len,
             );
@@ -134,7 +136,7 @@ pub const Block = struct {
             log.debug("batched {}\n", .{batch});
         }
 
-        return .{ .proccessed = consumed, .queue = 0 };
+        return .{ .notify = notify, .queue = 0 };
     }
 
     pub fn handle_notify(self: *Self, queue_idx: u19, vm: *Vm, io: std.Io) !NotifyResult {
@@ -153,21 +155,19 @@ pub const Block = struct {
             @panic("todo");
         };
 
-        var completed: usize = 0;
+        var notify = false;
 
         for (reqs.items) |req| {
             // Len == 0 means that request will be handled in async
             if (req.len != 0) {
-                token.queue.push_used(
+                notify |= token.queue.push_used(
                     req.head,
                     req.len,
                 );
-
-                completed += 1;
             }
         }
 
-        return .{ .queue = token.idx, .proccessed = completed != 0 };
+        return .{ .queue = token.idx, .notify = notify };
     }
 
     fn pop_completion(self: *Self) !?Completion {

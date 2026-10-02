@@ -10,6 +10,10 @@ const Mutex = std.Io.Mutex;
 const EventFd = @import("utils").EventFd.EventFd;
 const Mac = @import("utils").Mac;
 const queue = @import("queue.zig");
+pub const c = @cImport({
+    @cInclude("linux/virtio_ring.h");
+    @cInclude("linux/virtio_config.h");
+});
 
 const log = std.log.scoped(.virtio);
 
@@ -67,7 +71,7 @@ const VirtQueueState = struct {
 };
 
 pub const NotifyResult = struct {
-    proccessed: bool,
+    notify: bool,
     queue: usize,
 };
 
@@ -112,7 +116,7 @@ pub const VirtioCore = struct {
         }
 
         return .{
-            .device_features = features | VIRTIO_F_VERSION_1,
+            .device_features = features | (1 << c.VIRTIO_F_VERSION_1) | (1 << c.VIRTIO_RING_F_EVENT_IDX),
             .virt_queues = state,
             .queues = queues,
         };
@@ -160,6 +164,8 @@ pub const VirtioCore = struct {
             return;
         }
 
+        const suppress = (self.driver_features & (1 << c.VIRTIO_RING_F_EVENT_IDX)) != 0;
+
         state.queue = try VirtQueue.new(
             memory,
             val,
@@ -167,6 +173,7 @@ pub const VirtioCore = struct {
             state.available_ring,
             state.used_ring,
             state.elements,
+            suppress,
         );
     }
 

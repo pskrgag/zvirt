@@ -252,7 +252,7 @@ fn VirtioPci(comptime Device: type) type {
         fn handle_completion_event(self: *Self, io: std.Io) !void {
             const res = try self.device.handle_completion_event(io);
 
-            if (res.proccessed)
+            if (res.notify)
                 try self.signal_queue(res.queue, io);
         }
 
@@ -265,7 +265,7 @@ fn VirtioPci(comptime Device: type) type {
             }
 
             const result = try self.device.handle_notify(ctx, self.pci.vm, io);
-            if (result.proccessed) {
+            if (result.notify) {
                 try self.signal_queue(result.queue, io);
             }
         }
