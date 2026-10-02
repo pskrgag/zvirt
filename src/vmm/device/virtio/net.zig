@@ -132,9 +132,7 @@ pub const Net = struct {
             const header: *c.virtio_net_hdr_mrg_rxbuf = @ptrCast(@alignCast(ch.buffer[0].base));
             header.num_buffers = 1;
 
-            const res = token.state.queue.push_used(ch.head, @truncate(frame_size));
-            std.debug.assert(res);
-
+            token.state.queue.push_used(ch.head, @truncate(frame_size));
             handled = true;
 
             const tmp = self.tx_buffers.pop_chain();
@@ -197,7 +195,7 @@ pub const Net = struct {
 
         for (reqs.items) |ch| {
             const rqs = ch.get_requests();
-            var buffers: [16]posix.iovec_const = undefined;
+            var buffers: [32]posix.iovec_const = undefined;
 
             for (rqs, 0..) |r, i| {
                 const slice = r.as_ro();
@@ -209,11 +207,10 @@ pub const Net = struct {
             const res = try self.tap.writev(buffers[0..rqs.len]);
             _ = res;
 
-            const sent = token.state.queue.push_used(
+            token.state.queue.push_used(
                 ch.head,
                 0,
             );
-            std.debug.assert(sent);
         }
 
         return .{ .proccessed = true, .queue = token.idx };

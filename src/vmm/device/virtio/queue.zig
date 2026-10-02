@@ -42,6 +42,13 @@ const UsedRingHeader = extern struct {
 
         return entries[0..elems];
     }
+
+    fn used_event(self: *UsedRingHeader, elems: usize) u16 {
+        const offset = @sizeOf(UsedRingHeader) + @sizeOf(UsedElement) * elems;
+        const ptr: *u16 = @intFromPtr(self) + offset;
+
+        return @atomicLoad(u16, ptr, .monotonic);
+    }
 };
 
 const UsedElement = extern struct {
@@ -134,7 +141,7 @@ pub const VirtQueue = struct {
         self: *Self,
         descriptor_head: u16,
         written_len: u32,
-    ) bool {
+    ) void {
         const header = self.used_ring_ptr;
         const slots = header.slots(self.elements);
         const slot = self.next_used_idx % @as(u16, @intCast(self.elements));
@@ -146,7 +153,6 @@ pub const VirtQueue = struct {
 
         self.next_used_idx +%= 1;
         header.idx.store(self.next_used_idx, .release);
-        return true;
     }
 
     fn avail_ring(self: *Self, mem: *GuestMemory) ?*AvailableRing {

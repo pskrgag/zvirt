@@ -123,11 +123,10 @@ pub const Block = struct {
         while (try self.pop_completion()) |async_result| {
             const state = &self.core.virt_queues[0];
 
-            const res = state.queue.push_used(
+            state.queue.push_used(
                 async_result.head,
                 async_result.len,
             );
-            std.debug.assert(res);
 
             batch += 1;
             consumed = true;
@@ -161,11 +160,10 @@ pub const Block = struct {
         for (reqs.items) |req| {
             // Len == 0 means that request will be handled in async
             if (req.len != 0) {
-                const res = token.state.queue.push_used(
+                token.state.queue.push_used(
                     req.head,
                     req.len,
                 );
-                std.debug.assert(res);
 
                 completed += 1;
             }
