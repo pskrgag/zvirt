@@ -194,7 +194,7 @@ pub fn VirtioMmio(comptime Device: type) type {
 
         pub fn register_events(self: *const Self, vm: *Vm, id: u10) !void {
             if (self.device.completion_event_source()) |events| {
-                for (events, 0..) |event, i| {
+                for (events.slice(), 0..) |event, i| {
                     const ctx = FdCtx{ .kind = .Completion, .id = @truncate(i) };
                     try vm.register_fd(event.fd, id, @bitCast(ctx), .virtio, event.edge);
                 }
@@ -289,7 +289,7 @@ pub const VirtioMmioDevice = union(enum) {
                 break :blk .{ .block = transport };
             },
             .NetDevice => |net| blk: {
-                var device = try Net.new(net.mac, net.iface, alloc);
+                var device = try Net.new(net.mac, net.iface, 4, alloc);
                 errdefer device.deinit(alloc, io);
 
                 const transport = try alloc.create(VirtioMmio(Net));

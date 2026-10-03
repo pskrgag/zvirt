@@ -8,6 +8,7 @@ const IdAllocator = @import("utils").IdAlloc.IdAllocator;
 const PciClass = @import("../pci/config.zig").PciClass;
 const VirtioCore = @import("root.zig").VirtioCore;
 const NotifyResult = @import("root.zig").NotifyResult;
+const EventSources = @import("event_source.zig").EventSources;
 const Vm = @import("../../root.zig").Vm;
 
 pub const c = @cImport({
@@ -96,8 +97,11 @@ pub const Block = struct {
         };
     }
 
-    pub fn completion_event_source(self: *const Self) ?[1]struct { fd: std.posix.fd_t, edge: bool } {
-        return .{.{ .fd = self.engine.event_source() orelse return null, .edge = false }};
+    pub fn completion_event_source(self: *const Self) ?EventSources(1) {
+        return .{
+            .entries = .{.{ .fd = self.engine.event_source() orelse return null, .edge = false }},
+            .count = 1,
+        };
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {

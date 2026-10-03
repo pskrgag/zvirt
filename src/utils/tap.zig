@@ -18,7 +18,7 @@ pub const Tap = struct {
 
     const Self = @This();
 
-    pub fn new(name: []const u8, header_size: i32) !Self {
+    pub fn new(name: []const u8, header_size: i32, multi_queue: bool) !Self {
         var c_name: [c.IFNAMSIZ]u8 = @splat(0);
 
         if (name.len > c.IFNAMSIZ - 1)
@@ -50,8 +50,9 @@ pub const Tap = struct {
 
         @memcpy(&req.ifr_ifrn.ifrn_name, &c_name);
 
-        // We don't care about packet info (i guess?)
         req.ifr_ifru.ifru_flags = c.IFF_TAP | c.IFF_NO_PI | c.IFF_VNET_HDR;
+        if (multi_queue)
+            req.ifr_ifru.ifru_flags |= c.IFF_MULTI_QUEUE;
 
         var res = linux.ioctl(fd, c.TUNSETIFF, @intFromPtr(&req));
         if (linux.errno(res) != .SUCCESS) {
@@ -115,6 +116,6 @@ pub const Tap = struct {
 };
 
 test "tap" {
-    var tap = try Tap.new("net0", 12);
+    var tap = try Tap.new("net0", 12, false);
     defer tap.deinit();
 }

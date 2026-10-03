@@ -47,6 +47,7 @@ fn VirtioPci(comptime Device: type) type {
         driver_sel: u32 = 0,
         change_vector: u32 = c.VIRTIO_MSI_NO_VECTOR,
         queue_select: u16 = 0,
+        config_vector: u32 =  c.VIRTIO_MSI_NO_VECTOR,
         queue_vectors: [virtio.MAX_QUEUES_SUPPORTED]Atomic(u32) = @splat(Atomic(u32).init(c.VIRTIO_MSI_NO_VECTOR)),
         bar: u8,
 
@@ -67,7 +68,7 @@ fn VirtioPci(comptime Device: type) type {
             );
             errdefer pci.deinit(alloc);
 
-            try pci.init_msix(2, alloc);
+            try pci.init_msix(device.max_queues() + 1, alloc);
 
             const bar: u8 = try pci.allocate_bar(.{
                 .context = self,
@@ -239,7 +240,7 @@ fn VirtioPci(comptime Device: type) type {
 
         pub fn register_events(self: *Self, vm: *Vm, id: u10) !void {
             if (self.device.completion_event_source()) |events| {
-                for (events, 0..) |event, i| {
+                for (events.slice(), 0..) |event, i| {
                     const ctx = FdCtx{ .kind = .Completion, .id = @truncate(i) };
 
                     try vm.register_fd(event.fd, id, @bitCast(ctx), .pci, event.edge);
@@ -355,7 +356,7 @@ pub const VirtioPciDevice = union(enum) {
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };
             },
             .NetDevice => |net| blk: {
-                var device = try Net.new(net.mac, net.iface, alloc);
+                var device = try Net.new(net.mac, net.iface, 4, alloc);
                 errdefer device.deinit(alloc, io);
 
                 break :blk .{ .net = try VirtioPci(Net).new(device, bus, vm, alloc) };
