@@ -6,6 +6,7 @@ pub const EventFd = @import("eventfd.zig");
 pub const IdAlloc = @import("idalloc.zig");
 pub const Tap = @import("tap.zig").Tap;
 pub const Mac = @import("mac.zig").Mac;
+pub const IoWorker = @import("io_worker.zig");
 
 test {
     _ = @import("lazy.zig");

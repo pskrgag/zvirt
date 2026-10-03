@@ -14,6 +14,8 @@ const linux = std.os.linux;
 const EventFd = utils.EventFd.EventFd;
 const stat = @import("stat.zig");
 const Statistics = stat.Statistics;
+const io_worker = utils.IoWorker;
+
 pub const IoResult = kvm.IoResult;
 
 const memory = @import("memory.zig");
@@ -26,18 +28,17 @@ pub var kvm_system = lazy(kvm.Kvm, kvm.Kvm.init);
 
 const StopFlag = std.atomic.Value(bool);
 
-pub const EventSource = enum(u3) {
+pub const EventSource = enum(u2) {
     vcpu,
     io_bus,
     virtio,
     pci,
 };
 
-const EventToken = packed struct(u64) {
+const EventToken = packed struct(io_worker.UserContext) {
     id: u10,
     ctx: u19,
     source: EventSource,
-    _pad: u32 = 0,
 };
 
 pub const VmConfig = struct {
@@ -74,6 +75,9 @@ pub const VmConfig = struct {
     // Dump statistics at the end
     stat: bool = false,
 
+    // Num worker threads
+    worker_threads: usize = 4,
+
     const Self = @This();
 
     fn verify(self: *const Self) !void {
@@ -100,6 +104,8 @@ const VmState = struct {
     state: std.atomic.Value(VmStateKind) = std.atomic.Value(VmStateKind).init(.Initialized),
 };
 
+const INVALID_CPU: u32 = std.math.maxInt(u32);
+
 pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
@@ -107,11 +113,12 @@ pub const Vm = struct {
     io: std.Io,
     config: VmConfig,
     memory: *memory.GuestMemory,
-    epoll: Epoll,
+    worker: *io_worker.IoWorker,
     state: VmState = .{},
     old_sigaction: posix.Sigaction,
     archvm: arch.ArchVm,
     statistics: Statistics = Statistics.new(),
+    panic_cpu: std.atomic.Value(u32) = .init(INVALID_CPU),
 
     const Self = @This();
 
@@ -149,11 +156,16 @@ pub const Vm = struct {
             .memory = mem,
             .io = io,
             .config = config,
-            .epoll = try Epoll.new(),
+            .worker = try io_worker.IoWorker.new(
+                config.worker_threads,
+                .{ .f = Self.handler, .ctx = self },
+                allocator,
+                io,
+            ),
             .old_sigaction = old,
             .archvm = archvm,
         };
-        errdefer self.epoll.deinit();
+        errdefer self.worker.deinit(allocator, io);
         archvm_cleanup = &self.archvm;
 
         try self.archvm.setup_devices(&config, self, allocator, io);
@@ -213,7 +225,7 @@ pub const Vm = struct {
             }
         }
 
-        self.epoll.deinit();
+        self.worker.deinit(alloc, io);
         self.archvm.deinit(alloc, io);
         self.vm.deinit();
         self.memory.deinit(alloc);
@@ -285,9 +297,39 @@ pub const Vm = struct {
             .ctx = ctx,
             .source = source,
         };
-        const flags = linux.EPOLL.IN | if (edge) linux.EPOLL.ET else 0;
 
-        try self.epoll.add_with_events(fd, flags, @bitCast(token));
+        try self.worker.register_fd(fd, @bitCast(token), edge);
+    }
+
+    pub fn handler(ctx: *anyopaque, userctx: io_worker.UserContext) !void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        const token: EventToken = @bitCast(userctx);
+
+        switch (token.source) {
+            .vcpu => {
+                // Only abort when vCPU panicked
+                if (try self.vcpus[token.id].?.ack_event() != .None) {
+                    self.panic_cpu.store(token.id, .monotonic);
+
+                    _ = linux.futex(
+                        &self.panic_cpu,
+                        .{ .private = true, .cmd = .WAKE },
+                        1,
+                        .{ .timeout = null },
+                        null,
+                        0,
+                    );
+                }
+            },
+            .io_bus, .virtio, .pci => {
+                try self.archvm.device_bus.handle_event(
+                    token.source,
+                    token.id,
+                    token.ctx,
+                    self.io,
+                );
+            },
+        }
     }
 
     pub fn run(self: *Self, alloc: std.mem.Allocator, io: std.Io) !void {
@@ -309,53 +351,17 @@ pub const Vm = struct {
             }
         }
 
-        var panic_cpu: ?u64 = null;
+        self.worker.start(io);
 
-        while (true) {
-            var event_buffer: [1024]EpollEvent = undefined;
-
-            const events = self.epoll.pwait(&event_buffer, -1, linux.sigfillset()) catch |e| {
-                if (e == error.Interrupted)
-                    continue;
-
-                return e;
-            };
-
-            for (events) |event| {
-                const token: EventToken = @bitCast(event.data);
-
-                switch (token.source) {
-                    .vcpu => {
-                        // Only abort when vCPU panicked
-                        if (try self.vcpus[token.id].?.ack_event() != .None) {
-                            panic_cpu = token.id;
-                            break;
-                        }
-                    },
-                    .io_bus, .virtio, .pci => {
-                        try self.archvm.device_bus.handle_event(
-                            token.source,
-                            token.id,
-                            token.ctx,
-                            io,
-                        );
-                    },
-                }
-            }
-
-            if (panic_cpu) |pcpu| {
-                log.info("vCPU {} requested stop. Stopping the guest\n", .{pcpu});
-
-                for (self.vcpus, 0..) |vcpu, idx| {
-                    if (vcpu) |cpu| {
-                        if (idx != pcpu) {
-                            cpu.stop();
-                        }
-                    }
-                }
-
-                break;
-            }
+        while (self.panic_cpu.load(.monotonic) == INVALID_CPU) {
+            _ = linux.futex(
+                &self.panic_cpu,
+                .{ .private = true, .cmd = .WAIT },
+                INVALID_CPU,
+                .{ .timeout = null },
+                null,
+                0,
+            );
         }
 
         self.state.state.store(.Stopped, .monotonic);

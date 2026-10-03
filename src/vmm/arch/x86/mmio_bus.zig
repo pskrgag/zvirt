@@ -112,7 +112,7 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
                 const entry: *TreapNode = @fieldParentPtr("node", node);
                 const offset = mmio_request.pa - node.key.start;
 
-                log.debug("MMIO exit for {s}\n", .{entry.name});
+                // log.debug("MMIO exit for {s}\n", .{entry.name});
                 if (mmio_request.write) {
                     try entry.value.write_fn(
                         entry.value.context,
