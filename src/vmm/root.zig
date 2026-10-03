@@ -209,6 +209,9 @@ pub const Vm = struct {
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+        // Destroy worker before VCPU
+        self.worker.deinit(alloc, io);
+
         for (self.vcpus) |vcpu| {
             if (vcpu) |cpu|
                 cpu.deinit(alloc, io);
@@ -225,7 +228,6 @@ pub const Vm = struct {
             }
         }
 
-        self.worker.deinit(alloc, io);
         self.archvm.deinit(alloc, io);
         self.vm.deinit();
         self.memory.deinit(alloc);
