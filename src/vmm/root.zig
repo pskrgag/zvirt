@@ -36,8 +36,8 @@ pub const EventSource = enum(u3) {
 const EventToken = packed struct(u64) {
     id: u10,
     ctx: u19,
-    fd: posix.fd_t,
     source: EventSource,
+    _pad: u32 = 0,
 };
 
 pub const VmConfig = struct {
@@ -283,7 +283,6 @@ pub const Vm = struct {
         const token = EventToken{
             .id = id,
             .ctx = ctx,
-            .fd = fd,
             .source = source,
         };
         const flags = linux.EPOLL.IN | if (edge) linux.EPOLL.ET else 0;
@@ -327,13 +326,8 @@ pub const Vm = struct {
 
                 switch (token.source) {
                     .vcpu => {
-                        const eventfd = EventFd{ .fd = @intCast(token.fd) };
-
-                        // Read anyway to avoid hitting the same event.
-                        _ = try eventfd.read();
-
                         // Only abort when vCPU panicked
-                        if (self.vcpus[token.id].?.get_exit_reason() != .None) {
+                        if (try self.vcpus[token.id].?.ack_event() != .None) {
                             panic_cpu = token.id;
                             break;
                         }

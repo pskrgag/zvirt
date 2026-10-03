@@ -86,6 +86,13 @@ pub const VCpu = struct {
         alloc.destroy(self);
     }
 
+    pub fn ack_event(self: *Self) !?VCpuExitReason {
+        // Read anyway to avoid hitting the same event.
+        _ = try self.eventfd.read();
+
+        return self.get_exit_reason();
+    }
+
     fn run_loop(self: *Self, io: std.Io) !void {
         try self.start_event.wait(io);
         var result: ?IoResult = null;

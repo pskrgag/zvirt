@@ -47,7 +47,7 @@ fn VirtioPci(comptime Device: type) type {
         driver_sel: u32 = 0,
         change_vector: u32 = c.VIRTIO_MSI_NO_VECTOR,
         queue_select: u16 = 0,
-        config_vector: u32 =  c.VIRTIO_MSI_NO_VECTOR,
+        config_vector: u32 = c.VIRTIO_MSI_NO_VECTOR,
         queue_vectors: [virtio.MAX_QUEUES_SUPPORTED]Atomic(u32) = @splat(Atomic(u32).init(c.VIRTIO_MSI_NO_VECTOR)),
         bar: u8,
 

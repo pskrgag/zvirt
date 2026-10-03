@@ -272,7 +272,7 @@ pub const Net = struct {
                     if (payload.len != @sizeOf(u16))
                         return error.InvalidFormat;
 
-                    break :blk @alignCast(@ptrCast(payload));
+                    break :blk @ptrCast(@alignCast(payload));
                 };
                 const ack: *u8 = blk: {
                     const ack = reqs[1].as_rw() orelse return error.InvalidFormat;
