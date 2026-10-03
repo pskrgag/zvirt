@@ -203,13 +203,13 @@ pub const Vm = struct {
         }
 
         if (self.config.stat) {
-            log.info("VMM Statistics:\n", .{});
+            log.info("VMM Statistics:", .{});
 
             inline for (std.meta.fields(stat.StatKind)) |field| {
                 const value: stat.StatKind = @enumFromInt(field.value);
                 const name = @tagName(value);
 
-                std.debug.print("{s}: {d}\n", .{ name, self.statistics.read(value) });
+                log.info("{s}: {d}", .{ name, self.statistics.read(value) });
             }
         }
 

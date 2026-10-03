@@ -18,8 +18,6 @@ pub const c = @cImport({
     @cInclude("linux/virtio_ring.h");
 });
 
-const VIRTIO_NET_F_MAC = 1 << 5;
-
 const TxChain = struct {
     buffer: [32]posix.iovec,
     buffer_count: usize,
@@ -61,6 +59,7 @@ const TxBuffers = struct {
 
 const TX_QUEUE = 0;
 const RX_QUEUE = 1;
+const CONTROL_QUEUE = 2;
 
 pub const Net = struct {
     pub const Completion = struct {
@@ -87,12 +86,15 @@ pub const Net = struct {
             (1 << c.VIRTIO_NET_F_HOST_TSO4) |
             (1 << c.VIRTIO_NET_F_GUEST_TSO4) |
             (1 << c.VIRTIO_NET_F_HOST_TSO6) |
-            (1 << c.VIRTIO_NET_F_GUEST_TSO6);
+            (1 << c.VIRTIO_NET_F_GUEST_TSO6) |
+            (1 << c.VIRTIO_NET_F_CTRL_VQ);
     }
 
     pub fn max_queues(self: *const Self) usize {
         _ = self;
-        return 2;
+
+        // Announce 3 queues, however control might not exist if not negotiated.
+        return 3;
     }
 
     pub fn new(mac: Mac, iface: []const u8, alloc: std.mem.Allocator) !Self {
@@ -108,8 +110,12 @@ pub const Net = struct {
             .tx_buffers = try TxBuffers.new(alloc),
             .config = config,
             .tap = tap,
-            .core = try VirtioCore.new(Self.features(), 2, alloc),
+            .core = try VirtioCore.new(Self.features(), 3, alloc),
         };
+    }
+
+    fn has_control_queue(self: *const Self) bool {
+        return self.core.driver_features & (1 << c.VIRTIO_NET_F_CTRL_VQ) != 0;
     }
 
     fn tx_queue(self: *Self, io: std.Io) !VirtQueueToken {
@@ -118,6 +124,10 @@ pub const Net = struct {
 
     fn rx_queue(self: *Self, io: std.Io) !VirtQueueToken {
         return self.core.get_queue(RX_QUEUE, io);
+    }
+
+    fn control_queue(self: *Self, io: std.Io) !VirtQueueToken {
+        return self.core.get_queue(CONTROL_QUEUE, io);
     }
 
     fn try_read_packets(self: *Self, token: *const VirtQueueToken) !bool {
@@ -219,14 +229,26 @@ pub const Net = struct {
         return .{ .notify = notify, .queue = token.idx };
     }
 
+    fn proccess_control_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
+        _ = vm;
+        _ = token;
+
+        std.debug.assert(self.has_control_queue());
+        @panic("todo control");
+    }
+
     pub fn handle_notify(self: *Self, queue_idx: u19, vm: *Vm, io: std.Io) !NotifyResult {
         var token = try self.core.notified_queue(queue_idx, io);
         defer self.core.unlock_queue(token, io);
 
-        if (token.idx == 0) {
-            return self.proccess_rx_queue(vm, &token);
-        } else {
+        if (queue_idx == RX_QUEUE) {
             return self.proccess_tx_queue(vm, &token);
+        } else if (queue_idx == TX_QUEUE) {
+            return self.proccess_rx_queue(vm, &token);
+        } else if (queue_idx == CONTROL_QUEUE) {
+            return self.proccess_control_queue(vm, &token);
+        } else {
+            @panic("Unknown queue");
         }
     }
 
