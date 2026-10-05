@@ -22,8 +22,14 @@ pub const VCpuExitReason = enum(u8) {
 
 const ExitReason = std.atomic.Value(VCpuExitReason);
 
+pub const VCpuState = struct {
+    regs: kvm.vcpu.Regs,
+    sregs: kvm.vcpu.Sregs,
+    sregs2: kvm.vcpu.Sregs2,
+};
+
 pub const VCpu = struct {
-    cpu: kvm.Vcpu,
+    cpu: kvm.vcpu.Vcpu,
     num: usize,
     vm: *Vm,
     thread: std.Thread = undefined,
@@ -93,6 +99,15 @@ pub const VCpu = struct {
         return self.get_exit_reason();
     }
 
+    pub fn snapshot(self: *const Self) !VCpuState {
+        // TODO: check that CPU is not running
+        const regs = try self.cpu.get_regs();
+        const sregs = try self.cpu.get_sregs();
+        const sregs2 = try self.cpu.get_sregs2();
+
+        return .{ .regs = regs, .sregs = sregs, .sregs2 = sregs2 };
+    }
+
     fn run_loop(self: *Self, io: std.Io) !void {
         try self.start_event.wait(io);
         var result: ?IoResult = null;
@@ -129,11 +144,7 @@ pub const VCpu = struct {
                 .Io => |io_req| {
                     self.vm.stats().inc(.vmexit_io);
 
-                    // Detecting write to fake port, which indicates test exit
-                    if (try self.vm.archvm.device_bus.handle_io(io_req, io)) {
-                        self.exit_reason.store(.TestExit, .monotonic);
-                        break;
-                    }
+                    try self.vm.archvm.device_bus.handle_io(io_req, io);
                 },
                 .Shutdown => {
                     self.exit_reason.store(.Shutdown, .monotonic);

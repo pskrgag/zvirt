@@ -52,7 +52,7 @@ pub fn handle_event(
     }
 }
 
-pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
+pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !void {
     return self.io_bus.handle_io(io_request, io);
 }
 

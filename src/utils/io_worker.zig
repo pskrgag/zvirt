@@ -78,7 +78,6 @@ pub const IoWorker = struct {
             .edge = 0,
             .user_ctx = 0,
         };
-        // Keep this level-triggered and unread so every waiting worker wakes.
         try epoll.add(shutdown_event.fd, @bitCast(shutdown_token));
 
         self.* = .{

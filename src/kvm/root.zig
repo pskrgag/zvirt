@@ -7,7 +7,7 @@ const posix = std.posix;
 const ioctl = @import("ioctl.zig").ioctl;
 
 pub const Vm = @import("vm.zig").Vm;
-pub const Vcpu = @import("vcpu.zig").Vcpu;
+pub const vcpu = @import("vcpu.zig");
 pub const Segment = @import("vcpu.zig").Segment;
 pub const IoResult = @import("vcpu.zig").IoResult;
 

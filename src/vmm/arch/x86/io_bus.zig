@@ -194,7 +194,7 @@ fn pci_unsupported(data_ptr: [*]u8, io_request: anytype) void {
     }
 }
 
-pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
+pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !void {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
     const data_len =
         @as(usize, io_request.size) *
@@ -206,27 +206,21 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
         // UART (COM1)
         0x3f8...0x3ff => {
             try self.handle_com(io_request, 0, io_request.port - 0x3f8, io);
-            return false;
         },
         // UART (COM2)
         0x2f8...0x2ff => {
             try self.handle_com(io_request, 1, io_request.port - 0x2f8, io);
-            return false;
         },
         // UART (COM3)
         0x3e8...0x3ef => {
             try self.handle_com(io_request, 2, io_request.port - 0x3e8, io);
-            return false;
         },
         // UART (COM4)
         0x2e8...0x2ef => {
             try self.handle_com(io_request, 3, io_request.port - 0x2e8, io);
-            return false;
         },
         // Special port to indicate test exit
-        0xf4 => {
-            return true;
-        },
+        0xf4 => {},
         // No floppy, no POST diagnostics, no PS2
         0x3F0...0x3F7, 0x80, 0x64 => {
             if (io_request.size != 1)
@@ -234,8 +228,6 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
 
             if (io_request.dir == .Out)
                 std.mem.writeInt(u8, data_ptr[0..1], 0xff, .little);
-
-            return false;
         },
         0x70...0x71 => {
             if (io_request.size != 1)
@@ -256,14 +248,10 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
 
                 std.mem.writeInt(u8, data_ptr[0..1], res, .little);
             }
-
-            return false;
         },
 
         // DMA: todo
-        0x87 => {
-            return false;
-        },
+        0x87 => {},
 
         // PCI regs
         0xcf8 => {
@@ -280,16 +268,12 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
                     std.mem.writeInt(u32, data_ptr[0..4], @bitCast(self.address_port.load(.monotonic)), .little);
                 }
             }
-
-            return false;
         },
 
         // This must not happen, since in case of PCI support, linux must stick to 1st method.
         0xcfa => {
             std.debug.assert(self.pci_bus_obj == null);
             pci_unsupported(data_ptr, io_request);
-
-            return false;
         },
         0xcfb => {
             if (io_request.size != 1)
@@ -305,8 +289,6 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
 
                 std.mem.writeInt(u8, data_ptr[0..1], @as(u8, ap.enable) << 7, .little);
             }
-
-            return false;
         },
 
         // For my own sanity:
@@ -357,8 +339,6 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !bool {
             } else {
                 pci_unsupported(data_ptr, io_request);
             }
-
-            return false;
         },
         else => {
             log.err("unknown port access: {any}", .{io_request});
