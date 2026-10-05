@@ -37,3 +37,8 @@ tap:
 	sudo ip tuntap add dev net0 mode tap user "$USER" multi_queue
 	sudo ip addr add 192.0.2.1/24 dev net0
 	sudo ip link set net0 up
+
+guest:
+	clang -c -target x86_64-none-elf guest.s -o guest.o
+	ld.lld --image-base=0 -Ttext=0x1000 --entry=_start guest.o -o guest.elf
+	llvm-objcopy -O binary --only-section=.text guest.elf guest.bin

@@ -1,11 +1,12 @@
 //! x86 IO ports
 
+const builtin = @import("builtin");
 const std = @import("std");
 const device = @import("../../device/root.zig");
 const Io = std.Io;
 const IoResult = @import("kvm").IoResult;
 const Vm = @import("../../root.zig").Vm;
-const VmConfig = @import("../../root.zig").VmConfig;
+const DeviceConfig = @import("../../root.zig").DeviceConfig;
 const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const Mutex = std.Io.Mutex;
 const posix = std.posix;
@@ -15,6 +16,7 @@ const PciBridge = pci.PciBus;
 const PciAddress = pci.PciAddress;
 const PciDevice = @import("../../device/pci/root.zig").PciDevice;
 const Atomic = std.atomic.Value;
+const MemorySlot = @import("layout.zig").MemorySlot;
 
 const log = std.log.scoped(.io_bus);
 
@@ -40,6 +42,11 @@ pci_bus_obj: ?*PciBus = null,
 cmos: device.cmos.Cmos = .{},
 cmos_lock: Mutex = .init,
 address_port: Atomic(AddressPort) = .init(std.mem.zeroes(AddressPort)),
+
+debug_cb: ?struct {
+    ctx: *anyopaque,
+    cb: *const fn (*anyopaque) void,
+} = null,
 
 fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
     const original = try posix.tcgetattr(fd);
@@ -105,11 +112,12 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
     }
 }
 
-pub fn new(config: *const VmConfig, alloc: std.mem.Allocator) !Self {
+pub fn new(pci_range: ?MemorySlot, alloc: std.mem.Allocator) !Self {
     var self = Self{};
 
-    if (config.pci)
-        self.pci_bus_obj = try PciBus.new(pci.PciBridge.new(), config, alloc);
+    if (pci_range) |range| {
+        self.pci_bus_obj = try PciBus.new(pci.PciBridge.new(), range, alloc);
+    }
 
     return self;
 }
@@ -194,6 +202,11 @@ fn pci_unsupported(data_ptr: [*]u8, io_request: anytype) void {
     }
 }
 
+pub fn register_debug_port_cb(self: *Self, ctx: *anyopaque, cb: *const fn (ctx: *anyopaque) void) void {
+    if (builtin.is_test)
+        self.debug_cb = .{ .cb = cb, .ctx = ctx };
+}
+
 pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !void {
     const data_ptr: [*]u8 = @ptrCast(io_request.data);
     const data_len =
@@ -220,7 +233,15 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !void {
             try self.handle_com(io_request, 3, io_request.port - 0x2e8, io);
         },
         // Special port to indicate test exit
-        0xf4 => {},
+        0xf4 => {
+            if (!builtin.is_test) {
+                return;
+            }
+
+            if (self.debug_cb) |cb| {
+                cb.cb(cb.ctx);
+            }
+        },
         // No floppy, no POST diagnostics, no PS2
         0x3F0...0x3F7, 0x80, 0x64 => {
             if (io_request.size != 1)

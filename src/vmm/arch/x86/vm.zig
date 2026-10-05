@@ -13,6 +13,8 @@ const mmap = @import("test_utils").mmap;
 const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
 const IdAllocator = @import("utils").IdAlloc.IdAllocator;
 const acpi = @import("acpi.zig");
+const Snapshot = @import("../../snapshot/root.zig").Snapshot;
+const MmioAlloc = @import("../../device/mmio_alloc.zig").MmioAlloc;
 
 pub const DeviceBus = @import("device_bus.zig");
 pub const layout = @import("layout.zig");
@@ -80,10 +82,18 @@ pub const IrqAllocator = IdAllocator(16);
 pub const ArchVm = struct {
     device_bus: DeviceBus,
     irqs: IrqAllocator,
+    mmio_alloc: MmioAlloc,
 
     const Self = @This();
 
-    pub fn new(config: *const VmConfig, alloc: Allocator, io: std.Io) !Self {
+    pub fn new(
+        mem_layout: *const layout.MemoryLayout,
+        pci: bool,
+        vm: *kvm.Vm,
+        memory: *GuestMemory,
+        alloc: Allocator,
+        io: std.Io,
+    ) !Self {
         var idalloc = IrqAllocator{};
 
         // Reserve IRQ for com1
@@ -98,20 +108,16 @@ pub const ArchVm = struct {
         // Reserve IRQ for PIC cascade
         _ = idalloc.allocate_specific(2).?;
 
-        return .{ .device_bus = try DeviceBus.new(config, alloc, io), .irqs = idalloc };
-    }
-
-    pub fn setup_vm(
-        self: *Self,
-        vm: *kvm.Vm,
-        memory: *GuestMemory,
-        config: *const VmConfig,
-        alloc: Allocator,
-    ) !void {
-        _ = self;
+        const pci_range = if (pci) mem_layout.pci_range() else null;
 
         try vm.create_pit();
-        try Self.setup_memory(memory, config, alloc);
+        try Self.setup_memory(memory, mem_layout, alloc);
+
+        return .{
+            .device_bus = try DeviceBus.new(pci_range, alloc, io),
+            .irqs = idalloc,
+            .mmio_alloc = MmioAlloc.new(mem_layout.mmio_space()),
+        };
     }
 
     pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
@@ -125,7 +131,14 @@ pub const ArchVm = struct {
         alloc: std.mem.Allocator,
         io: std.Io,
     ) !void {
-        return self.device_bus.setup_devices(config, vm, &self.irqs, alloc, io);
+        return self.device_bus.setup_devices(
+            &config.device_config,
+            &self.mmio_alloc,
+            vm,
+            &self.irqs,
+            alloc,
+            io,
+        );
     }
 
     pub fn vm_prerun(
@@ -139,7 +152,7 @@ pub const ArchVm = struct {
         else
             DEFAULT_CMD_LINE});
 
-        if (!vm.config.pci) {
+        if (self.device_bus.io_bus.pci_bus_obj == null) {
             const old_line = cmd_line;
 
             cmd_line = try std.fmt.allocPrint(alloc, "{s} pci=off", .{old_line});
@@ -163,8 +176,12 @@ pub const ArchVm = struct {
         try acpi.setup_tables(vm);
     }
 
-    fn setup_memory(memory: *GuestMemory, config: *const VmConfig, alloc: Allocator) !void {
-        for (layout.memory_layout(config)) |entry| {
+    fn setup_memory(
+        memory: *GuestMemory,
+        mem_layout: *const layout.MemoryLayout,
+        alloc: Allocator,
+    ) !void {
+        for (mem_layout.layout) |entry| {
             if (entry.kind == .Ram or entry.kind == .Acpi) {
                 const ram = try mmap.mmap(
                     null,

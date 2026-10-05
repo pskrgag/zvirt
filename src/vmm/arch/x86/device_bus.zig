@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const VmConsoleConfig = @import("../../root.zig").VmConsoleConfig;
-const VmConfig = @import("../../root.zig").VmConfig;
+const DeviceConfig = @import("../../root.zig").DeviceConfig;
 const IoResult = @import("kvm").IoResult;
 const Vm = @import("../../root.zig").Vm;
 const VirtioMmioDevice = @import("../../device/virtio/mmio.zig").VirtioMmioDevice;
@@ -11,6 +11,7 @@ const PciDevice = @import("../../device/pci/root.zig").PciDevice;
 const layout = @import("layout.zig");
 const IrqAllocator = @import("vm.zig").IrqAllocator;
 const EventSource = @import("../../root.zig").EventSource;
+const MmioAlloc = @import("../../device/mmio_alloc.zig").MmioAlloc;
 
 const io_bus_struct = @import("io_bus.zig");
 const mmio_bus_struct = @import("mmio_bus.zig");
@@ -60,19 +61,20 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     return self.mmio_bus.handle_mmio(mmio_request, io);
 }
 
-pub fn new(config: *const VmConfig, alloc: std.mem.Allocator, io: std.Io) !Self {
+pub fn new(pci_range: ?layout.MemorySlot, alloc: std.mem.Allocator, io: std.Io) !Self {
     var mmio_bus = try mmio_bus_struct.new(alloc);
     errdefer mmio_bus.deinit(alloc, io);
 
     return .{
         .mmio_bus = mmio_bus,
-        .io_bus = try io_bus_struct.new(config, alloc),
+        .io_bus = try io_bus_struct.new(pci_range, alloc),
     };
 }
 
 pub fn setup_devices(
     self: *Self,
-    config: *const VmConfig,
+    config: *const DeviceConfig,
+    mmio_alloc: *MmioAlloc,
     vm: *Vm,
     irq_alloc: *IrqAllocator,
     alloc: std.mem.Allocator,
@@ -80,7 +82,7 @@ pub fn setup_devices(
 ) !void {
     if (config.block_device.path.len != 0) {
         if (!config.pci) {
-            const base = layout.virtio_device(config, 0);
+            const base = mmio_alloc.alloc_page();
             const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
 
             errdefer irq_alloc.free(irq);
@@ -127,7 +129,7 @@ pub fn setup_devices(
 
     if (config.network) |net| {
         if (!config.pci) {
-            const base = layout.virtio_device(config, 1);
+            const base = mmio_alloc.alloc_page();
             const irq = irq_alloc.allocate() orelse return error.CannotAllocateIrq;
 
             errdefer irq_alloc.free(irq);

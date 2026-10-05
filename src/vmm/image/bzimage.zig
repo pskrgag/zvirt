@@ -33,15 +33,15 @@ const SUPPORTED_VERSION = 0x20f;
 const MINIMAL_SIZE = SETUP_HEADER_OFFSET + @bitSizeOf(SetupHeader) / 8;
 
 fn fill_e820(params: *BootParams, config: *const VmConfig) void {
-    const layout = arch.layout.memory_layout(config);
+    const layout = arch.layout.memory_layout(config.ram_size);
 
-    for (layout, 0..) |entry, i| {
+    for (layout.layout, 0..) |entry, i| {
         params.e820_table[i].addr = entry.start;
         params.e820_table[i].size = entry.length;
         params.e820_table[i].type = @intFromEnum(entry.kind);
     }
 
-    params.e820_entries = @intCast(layout.len);
+    params.e820_entries = @intCast(layout.layout.len);
 }
 
 pub fn parse(

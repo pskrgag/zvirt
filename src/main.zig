@@ -129,10 +129,13 @@ fn parse_memory(memory: []const u8) !usize {
 }
 
 // TODO: move it to own lib and unit test it
-fn parse_block_device(data: []const u8) !struct { path: []const u8, async: bool } {
+fn parse_block_device(data: []const u8) !?struct { path: []const u8, async: bool } {
     var parts = std.mem.splitScalar(u8, data, ',');
     var path: []const u8 = "";
     var async: ?bool = null;
+
+    if (data.len == 0)
+        return null;
 
     while (parts.next()) |part| {
         const del = std.mem.find(u8, part, "=") orelse return error.InvalidFormat;
@@ -238,18 +241,20 @@ fn run() !void {
         }
     }
 
-    const block = try parse_block_device(config.block_device);
+    const b = try parse_block_device(config.block_device);
     const net = try parse_net_device(config.net_device);
 
     var vm = try Vm.new(.{
         .ram_size = memory_size,
         .binary = kernel_bytes,
         .initramfs = initramfs,
-        .block_device = .{ .path = block.path, .async = block.async },
-        .network = if (net) |n| .{ .mac = n.mac, .iface = n.iface } else null,
+        .device_config = .{
+            .block_device = if (b) |block| .{ .path = block.path, .async = block.async } else .{},
+            .network = if (net) |n| .{ .mac = n.mac, .iface = n.iface } else null,
+            .pci = config.enable_pci,
+        },
         .cmdline = config.cmdline,
         .smp = smp,
-        .pci = config.enable_pci,
         .stat = config.stat,
     }, io, allocator);
     defer vm.deinit(allocator, io);
@@ -266,5 +271,5 @@ fn run() !void {
         .configure_terminal = false,
         .index = 1,
     });
-    try vm.run(allocator, io);
+    try vm.run(io);
 }

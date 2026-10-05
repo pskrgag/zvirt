@@ -48,7 +48,8 @@ test "Vm restores sigaction" {
 }
 
 fn vm_run_thread(vm: *Vm, allocator: std.mem.Allocator, io: std.Io) !void {
-    try vm.run(allocator, io);
+    _ = allocator;
+    try vm.run(io);
 }
 
 test "Console attach" {
@@ -134,8 +135,8 @@ test "Cannot run vm two times" {
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
-    try vm.run(allocator, io);
-    try std.testing.expectError(error.AlreadyStarted, vm.run(allocator, io));
+    try vm.run(io);
+    try std.testing.expectError(error.AlreadyStarted, vm.run(io));
 }
 
 test "Cannot stop vm two times" {
@@ -160,7 +161,7 @@ test "Cannot stop vm two times" {
         defer vm.deinit(allocator, io);
 
         try std.testing.expectError(error.InvalidState, vm.stop());
-        try vm.run(allocator, io);
+        try vm.run(io);
         try std.testing.expectError(error.InvalidState, vm.stop());
     }
 
@@ -224,7 +225,7 @@ test "guest port write reaches COM1 UART" {
         .output = uart_output.file,
     });
 
-    try vm.run(allocator, io);
+    try vm.run(io);
 
     var captured: [16]u8 = undefined;
     try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
@@ -263,7 +264,7 @@ test "linux reaches shutdown" {
         .output = uart_output.file,
     });
 
-    try vm.run(allocator, io);
+    try vm.run(io);
 }
 
 fn dump_whole_file(output: *const test_utils.TmpUartOutput) !void {
@@ -624,8 +625,10 @@ fn test_virtio_read(pci: bool, async: bool) !void {
         .ram_size = 1 << 30,
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
-        .block_device = .{ .path = disk_path, .async = async },
-        .pci = pci,
+        .device_config = .{
+            .block_device = .{ .path = disk_path, .async = async },
+            .pci = pci,
+        },
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
@@ -706,8 +709,10 @@ fn test_virtio_write(pci: bool, async: bool, smp: u8) !void {
         .ram_size = 1 << 30,
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
-        .block_device = .{ .path = disk_path, .async = async },
-        .pci = pci,
+        .device_config = .{
+            .block_device = .{ .path = disk_path, .async = async },
+            .pci = pci,
+        },
         .smp = smp,
     }, io, allocator);
     defer vm.deinit(allocator, io);
@@ -833,8 +838,10 @@ fn test_virtio_net(smp: u8, pci: bool) !void {
         .ram_size = 1 << 30,
         .binary = binary_bytes,
         .initramfs = initrd_bytes,
-        .pci = pci,
-        .network = .{ .mac = try utils.Mac.from_str(TEST_MAC), .iface = TEST_IFACE },
+        .device_config = .{
+            .pci = pci,
+            .network = .{ .mac = try utils.Mac.from_str(TEST_MAC), .iface = TEST_IFACE },
+        },
         .smp = smp,
     }, io, allocator);
     defer vm.deinit(allocator, io);

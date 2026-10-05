@@ -272,7 +272,7 @@ pub const VirtioMmioDevice = union(enum) {
                 const num_queues = if (block.async)
                     1
                 else
-                    vm.config.smp;
+                    vm.cpu_count();
 
                 var device = try Block.new(block.path, num_queues, block.async, alloc, io);
                 errdefer device.deinit(alloc, io);

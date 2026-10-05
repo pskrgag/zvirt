@@ -15,6 +15,7 @@ const EventFd = utils.EventFd.EventFd;
 const stat = @import("stat.zig");
 const Statistics = stat.Statistics;
 const io_worker = utils.IoWorker;
+const Snapshot = @import("snapshot/root.zig").Snapshot;
 
 pub const IoResult = kvm.IoResult;
 
@@ -23,7 +24,7 @@ const log = std.log.scoped(.vmm);
 
 pub const arch = @import("arch/root.zig");
 
-const MAX_VCPUS = 32;
+pub const MAX_VCPUS = 32;
 pub var kvm_system = lazy(kvm.Kvm, kvm.Kvm.init);
 
 const StopFlag = std.atomic.Value(bool);
@@ -41,6 +42,23 @@ const EventToken = packed struct(io_worker.UserContext) {
     source: EventSource,
 };
 
+pub const DeviceConfig = struct {
+    // Block device (path to the image)
+    block_device: struct {
+        path: []const u8 = "",
+        async: bool = true,
+    } = .{},
+
+    // PCI support
+    pci: bool = false,
+
+    // Network support
+    network: ?struct {
+        mac: utils.Mac,
+        iface: []const u8,
+    } = null,
+};
+
 pub const VmConfig = struct {
     // Memory size (in bytes)
     ram_size: usize,
@@ -51,32 +69,20 @@ pub const VmConfig = struct {
     // Initramfs
     initramfs: ?[]const u8 = null,
 
-    // Block device (path to the image)
-    block_device: struct {
-        path: []const u8 = "",
-        async: bool = true,
-    } = .{},
-
     // Kernel cmdline
     cmdline: []const u8 = "",
 
     // Cpu count
     smp: u8 = 1,
 
-    // PCI support
-    pci: bool = false,
-
-    // Network support
-    network: ?struct {
-        mac: utils.Mac,
-        iface: []const u8,
-    } = null,
-
     // Dump statistics at the end
     stat: bool = false,
 
     // Num worker threads
     worker_threads: usize = 4,
+
+    // Device config
+    device_config: DeviceConfig = .{},
 
     const Self = @This();
 
@@ -111,7 +117,6 @@ pub const Vm = struct {
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
     vcpus_count: usize = 0,
     io: std.Io,
-    config: VmConfig,
     memory: *memory.GuestMemory,
     worker: *io_worker.IoWorker,
     state: VmState = .{},
@@ -119,35 +124,78 @@ pub const Vm = struct {
     archvm: arch.ArchVm,
     statistics: Statistics = Statistics.new(),
     panic_cpu: std.atomic.Value(u32) = .init(INVALID_CPU),
+    dump_stat: bool = false,
 
     const Self = @This();
 
     pub fn new(config: VmConfig, io: std.Io, allocator: std.mem.Allocator) !*Self {
         try config.verify();
 
+        var self = try Self.empty(
+            config.ram_size,
+            config.worker_threads,
+            config.device_config.pci,
+            allocator,
+            io,
+        );
+        errdefer self.deinit(allocator, io);
+
+        // Parse image (tho it should not write to memory, but it does for some reason)
+        const img = try image.parse(config.binary, self.memory, &config);
+
+        // Create BS cpu
+        try self.create_vcpu(img.ep, 0, io, allocator);
+
+        for (1..config.smp) |i| {
+            try self.create_vcpu(0x0, @truncate(i), io, allocator);
+        }
+
+        // Setup all devices. Must be after vCPU setup, since it depends on cpu_count()
+        try self.archvm.setup_devices(&config, self, allocator, io);
+
+        // This writes cmdline, so it must be last
+        try self.archvm.vm_prerun(self, config.cmdline, allocator);
+        return self;
+    }
+
+    fn empty(
+        ram_size: usize,
+        worker_threads: usize,
+        pci: bool,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+    ) !*Self {
         const system = try kvm_system.get();
-        var self = try allocator.create(Self);
+        const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
 
+        // NOTE: steps are documented for my own sanity, since I don't remember the code I've
+        // written like a month ago.
+
+        // Create empty KVM VM
         var vm = try system.create_vm();
         errdefer vm.deinit();
 
+        // Setup IRQchip
         try vm.create_irqchip();
 
+        // Empty guest memory
         var mem = try memory.GuestMemory.new(allocator);
         errdefer mem.deinit(allocator);
 
-        var archvm = try arch.ArchVm.new(&config, allocator, io);
+        const layout = arch.layout.memory_layout(ram_size);
+
+        // Empty archvm
+        var archvm = try arch.ArchVm.new(&layout, pci, &vm, mem, allocator, io);
         var archvm_cleanup = &archvm;
         errdefer archvm_cleanup.deinit(allocator, io);
 
-        try archvm.setup_vm(&vm, mem, &config, allocator);
-        const img = try image.parse(config.binary, mem, &config);
-
+        // Map regions into kvm
         for (mem.regions.items) |reg| {
             try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
         }
 
+        // Setup signal handler for vCPU kick.
         const old = Self.setup_sighandler();
         errdefer Self.restore_sighandler(old);
 
@@ -155,9 +203,8 @@ pub const Vm = struct {
             .vm = vm,
             .memory = mem,
             .io = io,
-            .config = config,
             .worker = try io_worker.IoWorker.new(
-                config.worker_threads,
+                worker_threads,
                 .{ .f = Self.handler, .ctx = self },
                 allocator,
                 io,
@@ -165,17 +212,12 @@ pub const Vm = struct {
             .old_sigaction = old,
             .archvm = archvm,
         };
-        errdefer self.worker.deinit(allocator, io);
-        archvm_cleanup = &self.archvm;
-
-        try self.archvm.setup_devices(&config, self, allocator, io);
-        try self.create_vcpu(img.ep, 0, io, allocator);
-
-        for (1..config.smp) |i| {
-            try self.create_vcpu(0x0, @truncate(i), io, allocator);
-        }
 
         return self;
+    }
+
+    pub fn cpu_count(self: *const Self) usize {
+        return self.vcpus_count;
     }
 
     pub fn stats(self: *Self) *Statistics {
@@ -217,7 +259,7 @@ pub const Vm = struct {
                 cpu.deinit(alloc, io);
         }
 
-        if (self.config.stat) {
+        if (self.dump_stat) {
             log.info("VMM Statistics:", .{});
 
             inline for (std.meta.fields(stat.StatKind)) |field| {
@@ -334,7 +376,26 @@ pub const Vm = struct {
         }
     }
 
-    pub fn run(self: *Self, alloc: std.mem.Allocator, io: std.Io) !void {
+    pub fn snapshot(self: *Self, io: std.Io) !Snapshot {
+        var snap = Snapshot{};
+
+        try self.stop();
+
+        for (0..self.cpu_count()) |c| {
+            const cpu = self.vcpus[c].?;
+
+            try cpu.wait_exit(io);
+            try snap.snapshot_cpu(self.vcpus[c].?);
+        }
+
+        for (self.memory.get_regions()) |reg| {
+            try snap.snapshot_ram(reg.gpa, reg.raw);
+        }
+
+        return snap;
+    }
+
+    pub fn run(self: *Self, io: std.Io) !void {
         if (self.state.state.cmpxchgStrong(
             .Initialized,
             .Running,
@@ -343,8 +404,6 @@ pub const Vm = struct {
         ) != null) {
             return error.AlreadyStarted;
         }
-
-        try self.archvm.vm_prerun(self, self.config.cmdline, alloc);
 
         for (self.vcpus, 0..) |vcpu, idx| {
             if (vcpu) |cpu| {
@@ -374,4 +433,5 @@ test {
     _ = @import("image/root.zig");
     _ = @import("io/root.zig");
     _ = @import("test.zig");
+    _ = @import("snapshot/test.zig");
 }

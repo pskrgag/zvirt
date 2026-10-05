@@ -37,6 +37,7 @@ pub const VCpu = struct {
     stop_flag: StopFlag = StopFlag.init(false),
     eventfd: EventFd,
     exit_reason: ExitReason = ExitReason.init(.None),
+    exit_event: std.Io.Event = .unset,
 
     const Self = @This();
 
@@ -108,6 +109,10 @@ pub const VCpu = struct {
         return .{ .regs = regs, .sregs = sregs, .sregs2 = sregs2 };
     }
 
+    pub fn wait_exit(self: *Self, io: std.Io) !void {
+        try self.exit_event.wait(io);
+    }
+
     fn run_loop(self: *Self, io: std.Io) !void {
         try self.start_event.wait(io);
         var result: ?IoResult = null;
@@ -119,6 +124,7 @@ pub const VCpu = struct {
 
         // Once thread reaches the end of the function, vCPU is dead. Signal it to the main thread.
         defer {
+            self.exit_event.set(io);
             self.eventfd.notify() catch @panic("no idea how to handle it");
         }
 

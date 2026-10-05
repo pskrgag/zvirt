@@ -64,6 +64,10 @@ pub const GuestMemory = struct {
         self.slot += 1;
     }
 
+    pub fn get_regions(self: *const Self) []const MemoryRegion {
+        return self.regions.items;
+    }
+
     pub fn deinit(self: *Self, alloc: Allocator) void {
         for (self.regions.items) |reg| {
             if (reg.mmaped) {

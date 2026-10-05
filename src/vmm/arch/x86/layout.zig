@@ -30,11 +30,20 @@ pub const MemorySlot = struct {
     },
 };
 
-pub fn virtio_device(config: *const VmConfig, idx: u64) u64 {
-    const ram_end = std.mem.alignForward(u64, HIGH_RAM_BEGIN + config.ram_size, 4096);
+pub const MemoryLayout = struct {
+    layout: [5]MemorySlot,
+    ram_size: usize,
 
-    return ram_end + idx * 4096;
-}
+    const Self = @This();
+
+    pub fn pci_range(self: *const MemoryLayout) MemorySlot {
+        return self.layout[self.layout.len - 1];
+    }
+
+    pub fn mmio_space(self: *const MemoryLayout) u64 {
+        return std.mem.alignForward(u64, HIGH_RAM_BEGIN + self.ram_size, 4096);
+    }
+};
 
 // NOTE: linux reserves first 64k of RAM for allocations:
 //
@@ -42,18 +51,15 @@ pub fn virtio_device(config: *const VmConfig, idx: u64) u64 {
 //
 // This memory may be used for AP cpu bootstrap, which has a limit of 1MiB
 // TODO: figure out why
-pub fn memory_layout(config: *const VmConfig) [5]MemorySlot {
-    return [_]MemorySlot{
-        MemorySlot{ .start = LOW_RAM_BEGIN, .length = 0x9e000, .kind = .Ram },
-        MemorySlot{ .start = BOOT_ACPI_ADDR, .length = 0x2000, .kind = .Acpi },
-        MemorySlot{ .start = 0x000A0000, .length = 0x00060000, .kind = .Reserved },
-        MemorySlot{ .start = HIGH_RAM_BEGIN, .length = config.ram_size, .kind = .Ram },
-        MemorySlot{ .start = HIGH_RAM_BEGIN + config.ram_size, .length = 0x5000, .kind = .Reserved },
+pub fn memory_layout(ram_size: usize) MemoryLayout {
+    return .{
+        .layout = [_]MemorySlot{
+            MemorySlot{ .start = LOW_RAM_BEGIN, .length = 0x9e000, .kind = .Ram },
+            MemorySlot{ .start = BOOT_ACPI_ADDR, .length = 0x2000, .kind = .Acpi },
+            MemorySlot{ .start = 0x000A0000, .length = 0x00060000, .kind = .Reserved },
+            MemorySlot{ .start = HIGH_RAM_BEGIN, .length = ram_size, .kind = .Ram },
+            MemorySlot{ .start = HIGH_RAM_BEGIN + ram_size, .length = 0x5000, .kind = .Reserved },
+        },
+        .ram_size = ram_size,
     };
-}
-
-pub fn pci_range(config: *const VmConfig) MemorySlot {
-    const layout = memory_layout(config);
-
-    return layout[layout.len - 1];
 }

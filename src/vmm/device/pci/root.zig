@@ -4,7 +4,7 @@ const std = @import("std");
 const log = std.log.scoped(.pci);
 const VirtioPciDevice = @import("../virtio/pci.zig").VirtioPciDevice;
 const arch = @import("../../arch/root.zig");
-const VmConfig = @import("../../root.zig").VmConfig;
+const DeviceConfig = @import("../../root.zig").DeviceConfig;
 pub const Bar = @import("bar.zig").Bar;
 pub const BarAllocator = @import("bar.zig").BarAllocator;
 const MmioDevice = @import("../root.zig").MmioDevice;
@@ -12,6 +12,7 @@ const PciConfigSpace = @import("config.zig").PciConfigSpace;
 const PciClass = @import("config.zig").PciClass;
 const msix = @import("msix.zig");
 const Vm = @import("../../root.zig").Vm;
+const MemorySlot = @import("../../arch/root.zig").layout.MemorySlot;
 
 pub const PciBridge = @import("bridge.zig").PciBridge;
 const MAX_DEVICES = 32;
@@ -217,7 +218,7 @@ pub const PciBus = struct {
 
     const Self = @This();
 
-    pub fn new(bridge: PciBridge, config: *const VmConfig, alloc: std.mem.Allocator) !*Self {
+    pub fn new(bridge: PciBridge, pci_range: MemorySlot, alloc: std.mem.Allocator) !*Self {
         const self = try alloc.create(Self);
         errdefer alloc.destroy(self);
 
@@ -226,7 +227,6 @@ pub const PciBus = struct {
         bridge_ptr.* = bridge;
 
         var devs: [MAX_DEVICES]?PciDevice = @splat(null);
-        const pci_range = arch.layout.pci_range(config);
         const allocator = BarAllocator.new(pci_range.start, pci_range.length);
 
         devs[0] = PciDevice{ .Brigde = bridge_ptr };
