@@ -52,7 +52,13 @@ pub const GuestMemory = struct {
         return self;
     }
 
-    pub fn add(self: *Self, gpa: GuestPhysicalAddress, mem: []u8, mmaped: bool, alloc: Allocator) !void {
+    pub fn add(
+        self: *Self,
+        gpa: GuestPhysicalAddress,
+        mem: []u8,
+        mmaped: bool,
+        alloc: Allocator,
+    ) !void {
         const new_slot = self.slot;
 
         try self.regions.append(alloc, .{
@@ -61,6 +67,7 @@ pub const GuestMemory = struct {
             .raw = mem,
             .mmaped = mmaped,
         });
+
         self.slot += 1;
     }
 

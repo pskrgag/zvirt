@@ -109,6 +109,12 @@ pub const VCpu = struct {
         return .{ .regs = regs, .sregs = sregs, .sregs2 = sregs2 };
     }
 
+    pub fn restore(self: *Self, state: VCpuState) !void {
+        try self.cpu.set_regs(&state.regs);
+        try self.cpu.set_sregs(&state.sregs);
+        try self.cpu.set_sregs2(&state.sregs2);
+    }
+
     pub fn wait_exit(self: *Self, io: std.Io) !void {
         try self.exit_event.wait(io);
     }

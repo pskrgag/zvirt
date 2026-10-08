@@ -125,6 +125,7 @@ pub const Vm = struct {
     statistics: Statistics = Statistics.new(),
     panic_cpu: std.atomic.Value(u32) = .init(INVALID_CPU),
     dump_stat: bool = false,
+    ram_size: usize,
 
     const Self = @This();
 
@@ -155,6 +156,30 @@ pub const Vm = struct {
 
         // This writes cmdline, so it must be last
         try self.archvm.vm_prerun(self, config.cmdline, allocator);
+        return self;
+    }
+
+    pub fn from_snapshot(snap: Snapshot, allocator: std.mem.Allocator, io: std.Io) !*Self {
+        var self = try Self.empty(
+            snap.mem_state.ram_size,
+            1,
+            snap.device_state.pci,
+            allocator,
+            io,
+        );
+        errdefer self.deinit(allocator, io);
+
+        for (snap.snapshoted_memory()) |reg| {
+            const slice = self.memory.as_slice(reg.start, reg.size) orelse return error.InvalidSnapshot;
+
+            @memcpy(slice, reg.memory);
+        }
+
+        for (snap.snapshoted_cpus(), 0..) |cpu, num| {
+            try self.create_vcpu(0x0, @truncate(num), io, allocator);
+            try self.vcpus[num].?.restore(cpu);
+        }
+
         return self;
     }
 
@@ -191,7 +216,7 @@ pub const Vm = struct {
         errdefer archvm_cleanup.deinit(allocator, io);
 
         // Map regions into kvm
-        for (mem.regions.items) |reg| {
+        for (mem.get_regions()) |reg| {
             try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
         }
 
@@ -211,6 +236,7 @@ pub const Vm = struct {
             ),
             .old_sigaction = old,
             .archvm = archvm,
+            .ram_size = ram_size,
         };
 
         return self;
@@ -273,7 +299,7 @@ pub const Vm = struct {
         self.archvm.deinit(alloc, io);
         self.vm.deinit();
         self.memory.deinit(alloc);
-        Self.restore_sighandler(self.old_sigaction);
+        // Self.restore_sighandler(self.old_sigaction);
         alloc.destroy(self);
     }
 
@@ -389,9 +415,10 @@ pub const Vm = struct {
         }
 
         for (self.memory.get_regions()) |reg| {
-            try snap.snapshot_ram(reg.gpa, reg.raw);
+            try snap.snapshot_memory(reg.gpa, reg.raw);
         }
 
+        snap.mem_state.ram_size = self.ram_size;
         return snap;
     }
 
