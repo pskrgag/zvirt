@@ -38,6 +38,9 @@ jobs:
       - name: Build test initrds
         run: just initrds
 
+      - name: Build guest binaries
+        run: just guests
+
       - name: Setup tap
         run: |
           just tap

@@ -22,7 +22,7 @@ pub const VCpuExitReason = enum(u8) {
 
 const ExitReason = std.atomic.Value(VCpuExitReason);
 
-pub const VCpuState = struct {
+pub const VCpuState = extern struct {
     regs: kvm.vcpu.Regs,
     sregs: kvm.vcpu.Sregs,
     sregs2: kvm.vcpu.Sregs2,

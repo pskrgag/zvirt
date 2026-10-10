@@ -2,6 +2,26 @@ default: initrds
 
 ZIG := "zig"
 
+# Compile test_bins/*.s into matching flat guest binaries.
+guests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output_dir="$PWD/zig-out/guests"
+    mkdir -p "$output_dir"
+    for source in test_bins/*.s; do
+        name="${source##*/}"
+        name="${name%.s}"
+
+        {{ZIG}} build-exe "$source" \
+            -target x86_64-freestanding \
+            -fentry=_start \
+            --image-base 0x100000 \
+            -femit-bin="$output_dir/$name.elf"
+        {{ZIG}} objcopy -O binary --only-section .text \
+            "$output_dir/$name.elf" "test_bins/$name.bin"
+        echo "Built test_bins/$name.bin"
+    done
+
 # Package each test_initfs/<name>/ as zig-out/initrds/<name>.img.
 initrds:
     #!/usr/bin/env bash

@@ -402,8 +402,9 @@ pub const Vm = struct {
         }
     }
 
-    pub fn snapshot(self: *Self, io: std.Io) !Snapshot {
+    pub fn snapshot(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot {
         var snap = Snapshot{};
+        errdefer snap.deinit(allocator);
 
         try self.stop();
 
@@ -411,11 +412,11 @@ pub const Vm = struct {
             const cpu = self.vcpus[c].?;
 
             try cpu.wait_exit(io);
-            try snap.snapshot_cpu(self.vcpus[c].?);
+            try snap.snapshot_cpu(cpu.num, try cpu.snapshot());
         }
 
         for (self.memory.get_regions()) |reg| {
-            try snap.snapshot_memory(reg.gpa, reg.raw);
+            try snap.snapshot_memory(reg.gpa, reg.raw, allocator);
         }
 
         snap.mem_state.ram_size = self.ram_size;
