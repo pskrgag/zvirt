@@ -43,7 +43,7 @@ pub fn Lazy(T: type) type {
                     _ = futex(
                         &self.state,
                         .{ .private = true, .cmd = .WAKE },
-                        1,
+                        std.math.maxInt(i32),
                         .{ .timeout = null },
                         null,
                         0,
