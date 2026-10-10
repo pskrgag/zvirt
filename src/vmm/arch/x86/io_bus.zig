@@ -34,9 +34,13 @@ const AddressPort = packed struct(u32) {
     enable: u1 = 0,
 };
 
-com_mutex: [MAX_COMS]Mutex = @splat(Mutex.init),
-com: [MAX_COMS]?device.uart_16550.Uart = @splat(null),
-orig_tcattr: [MAX_COMS]?posix.termios = @splat(null),
+const Com = struct {
+    mutex: Mutex = .init,
+    uart: ?device.uart_16550.Uart = null,
+    orig_tcattr: ?posix.termios = null,
+};
+
+com: [MAX_COMS]Com = @splat(.{}),
 
 pci_bus_obj: ?*PciBus = null,
 cmos: device.cmos.Cmos = .{},
@@ -67,8 +71,8 @@ fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
 
     try posix.tcsetattr(fd, .NOW, raw);
 
-    std.debug.assert(self.orig_tcattr[idx] == null);
-    self.orig_tcattr[idx] = original;
+    std.debug.assert(self.com[idx].orig_tcattr == null);
+    self.com[idx].orig_tcattr = original;
 }
 
 pub fn pci_bus(self: *Self) ?*PciBus {
@@ -86,15 +90,18 @@ pub fn attach_pci_device(self: *Self, pci_dev: PciDevice, id: usize) !*PciDevice
 }
 
 pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
-    if (console.index >= MAX_COMS)
+    if (console.index >= MAX_COMS) {
         return error.InvalidComIndex;
+    }
 
     const index: usize = console.index;
+    const port = &self.com[index];
 
-    if (self.com[index] != null)
+    if (port.uart != null) {
         return error.ComAlreadyExists;
+    }
 
-    self.com[index] = device.uart_16550.Uart{
+    port.uart = device.uart_16550.Uart{
         .in = console.input,
         .out = console.output,
         .irq = if (index == 0 or index == 2)
@@ -102,10 +109,11 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
         else
             3,
     };
-    try self.com[index].?.init(vm);
+    try port.uart.?.init(vm);
 
-    if (console.input) |in|
+    if (console.input) |in| {
         try vm.register_fd(in.handle, @intCast(index), 0, .io_bus, false);
+    }
 
     if (console.configure_terminal) {
         try self.setup_terminal(console.output.handle, index);
@@ -123,31 +131,37 @@ pub fn new(pci_range: ?MemorySlot, alloc: std.mem.Allocator) !Self {
 }
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
-    if (self.pci_bus_obj) |bus|
+    if (self.pci_bus_obj) |bus| {
         bus.deinit(alloc, io);
-
-    // unwrap here, since if self.original exists, then com1 must also exist
-    for (self.orig_tcattr, 0..) |orig, i| {
-        if (orig) |o|
-            posix.tcsetattr(self.com[i].?.out.handle, .NOW, o) catch @panic("failed to restore term");
     }
 
-    for (&self.com) |*com| {
-        if (com.*) |*c|
-            c.deinit();
+    for (&self.com) |*port| {
+        // Saved terminal settings imply that this port has an attached UART.
+        if (port.orig_tcattr) |original| {
+            posix.tcsetattr(port.uart.?.out.handle, .NOW, original) catch @panic("failed to restore term");
+        }
+    }
+
+    for (&self.com) |*port| {
+        if (port.uart) |*uart| {
+            uart.deinit();
+        }
     }
 }
 
 pub fn handle_event(self: *Self, id: u29, io: std.Io) !void {
-    if (id >= MAX_COMS)
+    if (id >= MAX_COMS) {
         return error.InvalidComIndex;
+    }
 
     const index: usize = @intCast(id);
-    try self.com_mutex[index].lock(io);
-    defer self.com_mutex[index].unlock(io);
+    const port = &self.com[index];
+    try port.mutex.lock(io);
+    defer port.mutex.unlock(io);
 
-    if (self.com[index]) |*com|
-        try com.handle_event(io);
+    if (port.uart) |*uart| {
+        try uart.handle_event(io);
+    }
 }
 
 fn handle_com(
@@ -166,24 +180,27 @@ fn handle_com(
 
     std.debug.assert(idx < self.com.len);
 
-    if (io_request.size != 1)
+    if (io_request.size != 1) {
         return error.InvalidWrite;
+    }
 
-    try self.com_mutex[idx].lock(io);
-    defer self.com_mutex[idx].unlock(io);
+    const port = &self.com[idx];
+    try port.mutex.lock(io);
+    defer port.mutex.unlock(io);
 
-    if (self.com[idx] == null)
+    if (port.uart == null) {
         return;
+    }
 
-    if (self.com[idx]) |*com| {
+    if (port.uart) |*uart| {
         if (io_request.dir == .Out) {
-            try com.write_reg(
+            try uart.write_reg(
                 std.enums.fromInt(device.uart_16550.Register, offset).?,
                 data[0],
                 io,
             );
         } else {
-            const res = try com.read_reg(
+            const res = try uart.read_reg(
                 std.enums.fromInt(device.uart_16550.Register, offset).?,
                 io,
             );
@@ -191,8 +208,9 @@ fn handle_com(
             std.mem.writeInt(u8, data_ptr[0..1], res, .little);
         }
     } else {
-        if (io_request.dir == .Out)
+        if (io_request.dir == .Out) {
             std.mem.writeInt(u8, data_ptr[0..1], 0xff, .little);
+        }
     }
 }
 
