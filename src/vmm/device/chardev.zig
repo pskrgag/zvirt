@@ -5,6 +5,8 @@ const File = std.Io.File;
 const Vm = @import("../root.zig").Vm;
 const posix = std.posix;
 
+const log = std.log.scoped(.chardev);
+
 // TODO: do we even need support for other type of streams? I doubt it
 
 fn setup_terminal(fd: posix.fd_t) !posix.termios {
@@ -36,6 +38,7 @@ pub const CharDev = struct {
     storage: []u8,
     rx_queue: std.Deque(u8),
     orig_tcattr: ?posix.termios = null,
+    pending_escape: bool = false,
 
     const Self = @This();
 
@@ -79,6 +82,10 @@ pub const CharDev = struct {
         return self.rx_queue.len == 0;
     }
 
+    pub fn is_terminal(self: *const Self) bool {
+        return self.orig_tcattr != null;
+    }
+
     pub fn handle_event(self: *Self, io: std.Io) !void {
         while (true) {
             var buffer: [1024]u8 = undefined;
@@ -87,7 +94,31 @@ pub const CharDev = struct {
             // Events are registered only when an input stream is attached.
             const read = try self.in.?.readStreaming(io, &buffers);
             for (buffer[0..read]) |byte| {
-                self.rx_queue.pushBackBounded(byte) catch @panic("todo");
+                if (self.is_terminal()) {
+                    if (byte == 0x01) {
+                        self.pending_escape = true;
+                        continue;
+                    }
+
+                    if (self.pending_escape) {
+                        switch (byte) {
+                            'x' => {
+                                log.warn("Stopping VM by console request", .{});
+                                self.vm.stop() catch @panic("VM must be running");
+
+                                // Break the loop, since vm must be stopped anyway.
+                                self.pending_escape = false;
+                                break;
+                            },
+                            else => {},
+                        }
+                    }
+
+                    self.pending_escape = false;
+                }
+
+                // Data loss
+                self.rx_queue.pushBackBounded(byte) catch log.err("rx buffer overflow", .{});
             }
 
             if (read < buffer.len) {
