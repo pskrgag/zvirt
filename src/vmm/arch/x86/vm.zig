@@ -120,8 +120,13 @@ pub const ArchVm = struct {
         };
     }
 
-    pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
-        return self.device_bus.attach_console(console, vm);
+    pub fn attach_console(
+        self: *Self,
+        console: *const VmConsoleConfig,
+        vm: *Vm,
+        alloc: std.mem.Allocator,
+    ) !void {
+        return self.device_bus.attach_console(console, vm, alloc);
     }
 
     pub fn setup_devices(

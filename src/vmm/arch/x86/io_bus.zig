@@ -37,7 +37,6 @@ const AddressPort = packed struct(u32) {
 const Com = struct {
     mutex: Mutex = .init,
     uart: ?device.uart_16550.Uart = null,
-    orig_tcattr: ?posix.termios = null,
 };
 
 com: [MAX_COMS]Com = @splat(.{}),
@@ -51,29 +50,6 @@ debug_cb: ?struct {
     ctx: *anyopaque,
     cb: *const fn (*anyopaque) void,
 } = null,
-
-fn setup_terminal(self: *Self, fd: posix.fd_t, idx: usize) !void {
-    const original = try posix.tcgetattr(fd);
-    var raw = original;
-
-    // Deliver input without waiting for a newline.
-    raw.lflag.ICANON = false;
-
-    // Do not echo typed characters.
-    raw.lflag.ECHO = false;
-
-    // Keep Ctrl-C, Ctrl-Z, etc. working as signals.
-    raw.lflag.ISIG = false;
-
-    // A read may return as soon as one byte is available.
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
-
-    try posix.tcsetattr(fd, .NOW, raw);
-
-    std.debug.assert(self.com[idx].orig_tcattr == null);
-    self.com[idx].orig_tcattr = original;
-}
 
 pub fn pci_bus(self: *Self) ?*PciBus {
     if (self.pci_bus_obj) |obj| {
@@ -89,7 +65,12 @@ pub fn attach_pci_device(self: *Self, pci_dev: PciDevice, id: usize) !*PciDevice
     return try self.pci_bus_obj.?.attach(pci_dev, id);
 }
 
-pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
+pub fn attach_console(
+    self: *Self,
+    console: *const VmConsoleConfig,
+    vm: *Vm,
+    alloc: std.mem.Allocator,
+) !void {
     if (console.index >= MAX_COMS) {
         return error.InvalidComIndex;
     }
@@ -101,22 +82,26 @@ pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !vo
         return error.ComAlreadyExists;
     }
 
-    port.uart = device.uart_16550.Uart{
-        .in = console.input,
-        .out = console.output,
-        .irq = if (index == 0 or index == 2)
-            4
-        else
-            3,
-    };
-    try port.uart.?.init(vm);
+    const irq: u32 = if (index == 0 or index == 2)
+        4
+    else
+        3;
+
+    port.uart = try device.uart_16550.Uart.new(
+        console.output,
+        console.input,
+        irq,
+        vm,
+        console.configure_terminal,
+        alloc,
+    );
+    errdefer {
+        port.uart.?.deinit(alloc);
+        port.uart = null;
+    }
 
     if (console.input) |in| {
         try vm.register_fd(in.handle, @intCast(index), 0, .io_bus, false);
-    }
-
-    if (console.configure_terminal) {
-        try self.setup_terminal(console.output.handle, index);
     }
 }
 
@@ -136,15 +121,8 @@ pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
     }
 
     for (&self.com) |*port| {
-        // Saved terminal settings imply that this port has an attached UART.
-        if (port.orig_tcattr) |original| {
-            posix.tcsetattr(port.uart.?.out.handle, .NOW, original) catch @panic("failed to restore term");
-        }
-    }
-
-    for (&self.com) |*port| {
         if (port.uart) |*uart| {
-            uart.deinit();
+            uart.deinit(alloc);
         }
     }
 }

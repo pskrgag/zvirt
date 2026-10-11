@@ -21,8 +21,13 @@ mmio_bus: *mmio_bus_struct,
 
 const Self = @This();
 
-pub fn attach_console(self: *Self, console: *const VmConsoleConfig, vm: *Vm) !void {
-    try self.io_bus.attach_console(console, vm);
+pub fn attach_console(
+    self: *Self,
+    console: *const VmConsoleConfig,
+    vm: *Vm,
+    alloc: std.mem.Allocator,
+) !void {
+    try self.io_bus.attach_console(console, vm, alloc);
 }
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {

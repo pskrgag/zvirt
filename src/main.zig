@@ -264,12 +264,12 @@ fn run() !void {
         .output = std.Io.File.stdout(),
         .configure_terminal = true,
         .index = 0,
-    });
+    }, allocator);
 
     try vm.attach_console(.{
         .output = std.Io.File.stderr(),
         .configure_terminal = false,
         .index = 1,
-    });
+    }, allocator);
     try vm.run(io);
 }

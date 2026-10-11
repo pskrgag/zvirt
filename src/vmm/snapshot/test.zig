@@ -101,7 +101,7 @@ fn test_snapshot_restore(serialized: bool) !void {
     try restored.attach_console(.{
         .index = 0,
         .output = output.file,
-    });
+    }, allocator);
 
     const thread = try std.Thread.spawn(.{}, Vm.run, .{ restored, io });
     defer {

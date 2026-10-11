@@ -251,11 +251,11 @@ pub const Vm = struct {
     }
 
     // thread-unsafe
-    pub fn attach_console(self: *Self, console: VmConsoleConfig) !void {
+    pub fn attach_console(self: *Self, console: VmConsoleConfig, alloc: std.mem.Allocator) !void {
         if (self.state.state.load(.monotonic) != .Initialized)
             return error.InvalidState;
 
-        try self.archvm.attach_console(&console, self);
+        try self.archvm.attach_console(&console, self, alloc);
     }
 
     pub fn register_irq(self: *Self, eventfd: *const EventFd, num: u32) !void {

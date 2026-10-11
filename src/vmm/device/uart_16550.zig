@@ -8,6 +8,7 @@ const Io = std.Io;
 const log = std.log.scoped(.uart_16550);
 const Vm = @import("../root.zig").Vm;
 const Mutex = std.Io.Mutex;
+const CharDev = @import("chardev.zig").CharDev;
 
 pub const Register = enum(u16) {
     Zero = 0,
@@ -98,8 +99,7 @@ const Iir = packed struct(u8) {
 };
 
 pub const Uart = struct {
-    in: ?File,
-    out: File,
+    chardev: CharDev,
     lcr: Lcr = .{},
     scr: u8 = 0,
     mcr: u8 = 0,
@@ -109,56 +109,41 @@ pub const Uart = struct {
     lsr: Lsr = .{},
     iir: Iir = .{},
     thre_pending: bool = false,
-    storage: [4096]u8 = undefined,
-    rx_queue: std.Deque(u8) = undefined,
     irq: u32,
     irqfd: EventFd = undefined,
     irq_set: bool = false,
 
     const Self = @This();
 
-    pub fn init(self: *Self, vm: *Vm) !void {
-        self.irqfd = try EventFd.new(0);
-        errdefer self.irqfd.deinit();
+    pub fn new(out: File, in: ?File, irq: u32, vm: *Vm, term: bool, alloc: std.mem.Allocator) !Self {
+        var chardev = try CharDev.new(out, in, vm, 1024, term, alloc);
+        errdefer chardev.deinit(alloc);
 
-        try vm.register_irq(&self.irqfd, self.irq);
-        self.rx_queue = std.Deque(u8).initBuffer(&self.storage);
+        var irqfd = try EventFd.new(0);
+        errdefer irqfd.deinit();
+
+        try vm.register_irq(&irqfd, irq);
+        return .{ .chardev = chardev, .irq = irq, .irqfd = irqfd };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
         self.irqfd.deinit();
+        self.chardev.deinit(alloc);
     }
 
     pub fn handle_event(self: *Self, io: std.Io) !void {
-        while (true) {
-            var buffer: [1024]u8 = undefined;
-            var buffers: [1][]u8 = .{buffer[0..]};
+        try self.chardev.handle_event(io);
 
-            // Unwrap here, since it this function must not be called if there is no
-            // input source
-            const read = try self.in.?.readStreaming(io, &buffers);
-            try self.push_rx_bytes(buffer[0..read]);
-
-            if (read < 1024)
-                break;
-        }
-    }
-
-    fn push_rx_bytes(self: *Self, bytes: []const u8) !void {
-        for (bytes) |byte| {
-            self.rx_queue.pushBackBounded(byte) catch @panic("todo");
-        }
-
-        if (self.rx_queue.len > 0) {
+        if (!self.chardev.rx_queue_is_empty()) {
             self.lsr.data_ready = 1;
             try self.update_irq();
         }
     }
 
     fn pop_rx_byte(self: *Self) u8 {
-        const res = self.rx_queue.popFront() orelse 0;
+        const res = self.chardev.pop_byte() orelse 0;
 
-        if (self.rx_queue.len == 0) {
+        if (self.chardev.rx_queue_is_empty()) {
             self.lsr.data_ready = 0;
         }
 
@@ -185,7 +170,7 @@ pub const Uart = struct {
 
     fn write_byte(self: *Self, data: u8, io: Io) !void {
         const arr = [_]u8{data};
-        try self.out.writeStreamingAll(io, &arr);
+        try self.chardev.write(&arr, io);
     }
 
     fn dlap(self: *const Self) bool {
