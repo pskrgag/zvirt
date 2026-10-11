@@ -110,6 +110,9 @@ pub const CharDev = struct {
                                 self.pending_escape = false;
                                 break;
                             },
+                            's' => {
+                                log.warn("Snapshotting VM", .{});
+                            },
                             else => {},
                         }
                     }

@@ -23,6 +23,7 @@ pub const VCpuExitReason = enum(u8) {
 const ExitReason = std.atomic.Value(VCpuExitReason);
 
 pub const VCpuState = extern struct {
+    num: u8,
     regs: kvm.vcpu.Regs,
     sregs: kvm.vcpu.Sregs,
     sregs2: kvm.vcpu.Sregs2,
@@ -106,7 +107,7 @@ pub const VCpu = struct {
         const sregs = try self.cpu.get_sregs();
         const sregs2 = try self.cpu.get_sregs2();
 
-        return .{ .regs = regs, .sregs = sregs, .sregs2 = sregs2 };
+        return .{ .regs = regs, .sregs = sregs, .sregs2 = sregs2, .num = @intCast(self.num) };
     }
 
     pub fn restore(self: *Self, state: VCpuState) !void {

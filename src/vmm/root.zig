@@ -16,6 +16,7 @@ const stat = @import("stat.zig");
 const Statistics = stat.Statistics;
 const io_worker = utils.IoWorker;
 const Snapshot = @import("snapshot/root.zig").Snapshot;
+const VmSnapshotState = @import("vm_snapshot.zig").VmSnapshotState;
 
 pub const IoResult = kvm.IoResult;
 
@@ -159,23 +160,27 @@ pub const Vm = struct {
         return self;
     }
 
-    pub fn from_snapshot(snap: Snapshot, allocator: std.mem.Allocator, io: std.Io) !*Self {
+    pub fn from_snapshot(
+        snap: Snapshot(VmSnapshotState),
+        allocator: std.mem.Allocator,
+        io: std.Io,
+    ) !*Self {
         var self = try Self.empty(
-            snap.mem_state.ram_size,
+            snap.data.ram_size,
             1,
-            snap.device_state.pci,
+            snap.data.device_state.pci,
             allocator,
             io,
         );
         errdefer self.deinit(allocator, io);
 
-        for (snap.snapshoted_memory()) |reg| {
-            const slice = self.memory.as_slice(reg.start, reg.size) orelse return error.InvalidSnapshot;
+        for (snap.data.snapshoted_memory()) |reg| {
+            const slice = self.memory.as_slice(reg.start, reg.memory.len) orelse return error.InvalidSnapshot;
 
             @memcpy(slice, reg.memory);
         }
 
-        for (snap.snapshoted_cpus(), 0..) |cpu, num| {
+        for (snap.data.snapshoted_cpus(), 0..) |cpu, num| {
             try self.create_vcpu(0x0, @truncate(num), io, allocator);
             try self.vcpus[num].?.restore(cpu);
         }
@@ -402,8 +407,8 @@ pub const Vm = struct {
         }
     }
 
-    pub fn snapshot(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot {
-        var snap = Snapshot{};
+    pub fn snapshot(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot(VmSnapshotState) {
+        var snap = VmSnapshotState{};
         errdefer snap.deinit(allocator);
 
         try self.stop();
@@ -412,15 +417,15 @@ pub const Vm = struct {
             const cpu = self.vcpus[c].?;
 
             try cpu.wait_exit(io);
-            try snap.snapshot_cpu(cpu.num, try cpu.snapshot());
+            try snap.snapshot_cpu(try cpu.snapshot(), allocator);
         }
 
         for (self.memory.get_regions()) |reg| {
             try snap.snapshot_memory(reg.gpa, reg.raw, allocator);
         }
 
-        snap.mem_state.ram_size = self.ram_size;
-        return snap;
+        snap.ram_size = self.ram_size;
+        return Snapshot(VmSnapshotState).new(snap);
     }
 
     pub fn run(self: *Self, io: std.Io) !void {

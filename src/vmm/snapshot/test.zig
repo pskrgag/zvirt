@@ -3,7 +3,8 @@
 const std = @import("std");
 const test_utils = @import("test_utils");
 const Vm = @import("../root.zig").Vm;
-const Snapshot = @import("root.zig").Snapshot;
+const VmSnapshotState = @import("../vm_snapshot.zig").VmSnapshotState;
+const Snapshot = @import("root.zig").Snapshot(VmSnapshotState);
 
 const Checkpoint = struct {
     vm: *Vm,
@@ -54,7 +55,7 @@ fn test_snapshot_restore(serialized: bool) !void {
         });
         break :snapshot try vm.snapshot(io, allocator);
     };
-    defer snap.deinit(allocator);
+    defer snap.data.deinit(allocator);
 
     if (serialized) {
         var tmp_dir = std.testing.tmpDir(.{});
@@ -68,22 +69,23 @@ fn test_snapshot_restore(serialized: bool) !void {
 
         var buffer: [4096]u8 = undefined;
         var writer = file.writer(io, &buffer);
-        try snap.serialize_to(&writer.interface);
+        try snap.serialize(&writer.interface);
         try writer.interface.flush();
 
         var reader = file.reader(io, &buffer);
-        var decoded = try Snapshot.serialize_from(&reader.interface, allocator);
-        errdefer decoded.deinit(allocator);
+        var decoded = try Snapshot.deserialize(&reader.interface, allocator);
+        errdefer decoded.data.deinit(allocator);
 
-        try std.testing.expectEqual(snap.mem_state.ram_size, decoded.mem_state.ram_size);
-        try std.testing.expectEqualDeep(snap.snapshoted_cpus(), decoded.snapshoted_cpus());
-        try std.testing.expectEqualDeep(snap.snapshoted_memory(), decoded.snapshoted_memory());
+        try std.testing.expectEqual(snap.data.ram_size, decoded.data.ram_size);
+        try std.testing.expectEqualDeep(snap.data.device_state, decoded.data.device_state);
+        try std.testing.expectEqualDeep(snap.data.snapshoted_cpus(), decoded.data.snapshoted_cpus());
+        try std.testing.expectEqualDeep(snap.data.snapshoted_memory(), decoded.data.snapshoted_memory());
 
-        snap.deinit(allocator);
+        snap.data.deinit(allocator);
         snap = decoded;
     }
 
-    const cpus = snap.snapshoted_cpus();
+    const cpus = snap.data.snapshoted_cpus();
     try std.testing.expectEqual(@as(usize, 1), cpus.len);
     try std.testing.expectEqual(@as(u64, 9), cpus[0].regs.rcx);
     try std.testing.expectEqual(@as(u64, 10), cpus[0].regs.rax);
@@ -136,7 +138,7 @@ test "Snapshot serialize cpu + ram" {
 
 test "Snapshot owns memory" {
     const allocator = std.testing.allocator;
-    var snap = Snapshot{};
+    var snap = VmSnapshotState{};
     defer snap.deinit(allocator);
 
     var source = [_]u8{ 1, 2, 3, 4 };
@@ -150,13 +152,17 @@ test "Snapshot owns memory" {
 }
 
 test "Snapshot memory allocation failure preserves existing entries" {
-    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 2 });
     const allocator = failing.allocator();
-    var snap = Snapshot{};
+    var snap = VmSnapshotState{};
     defer snap.deinit(allocator);
 
     try snap.snapshot_memory(0x1000, &.{ 1, 2 }, allocator);
     try std.testing.expectError(error.OutOfMemory, snap.snapshot_memory(0x2000, &.{ 3, 4 }, allocator));
     try std.testing.expectEqual(@as(usize, 1), snap.snapshoted_memory().len);
     try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, snap.snapshoted_memory()[0].memory);
+}
+
+test {
+    _ = @import("serializer.zig");
 }
