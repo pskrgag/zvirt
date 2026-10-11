@@ -120,6 +120,24 @@ pub const ArchVm = struct {
         };
     }
 
+    pub const ArchVmState = struct {
+        mmio_alloc: MmioAlloc,
+        irq_alloc: IrqAllocator,
+        device_bus: DeviceBus.State,
+
+        pub fn deinit(self: *ArchVmState, alloc: std.mem.Allocator) void {
+            self.device_bus.deinit(alloc);
+        }
+    };
+
+    pub fn snapshot(self: *Self, alloc: std.mem.Allocator, io: std.Io) !ArchVmState {
+        return .{
+            .mmio_alloc = self.mmio_alloc,
+            .irq_alloc = self.irqs,
+            .device_bus = try self.device_bus.snapshot(alloc, io),
+        };
+    }
+
     pub fn attach_console(
         self: *Self,
         console: *const VmConsoleConfig,

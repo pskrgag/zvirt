@@ -40,6 +40,15 @@ pub const CharDev = struct {
     orig_tcattr: ?posix.termios = null,
     pending_escape: bool = false,
 
+    pub const State = struct {
+        rx_queue: []const u8,
+        pending_escape: bool,
+
+        pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
+            alloc.free(self.rx_queue);
+        }
+    };
+
     const Self = @This();
 
     pub fn new(out: File, in: ?File, vm: *Vm, rx_queue_size: usize, term: bool, alloc: std.mem.Allocator) !Self {
@@ -72,6 +81,19 @@ pub const CharDev = struct {
         }
 
         alloc.free(self.storage);
+    }
+
+    pub fn snapshot(self: *const Self, alloc: std.mem.Allocator) !State {
+        const bytes = try alloc.alloc(u8, self.rx_queue.len);
+
+        for (bytes, 0..) |*byte, index| {
+            byte.* = self.rx_queue.at(index);
+        }
+
+        return .{
+            .rx_queue = bytes,
+            .pending_escape = self.pending_escape,
+        };
     }
 
     pub fn pop_byte(self: *Self) ?u8 {

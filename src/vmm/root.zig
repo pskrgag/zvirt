@@ -168,7 +168,7 @@ pub const Vm = struct {
         var self = try Self.empty(
             snap.data.ram_size,
             1,
-            snap.data.device_state.pci,
+            snap.data.arch_state.device_bus.io.pci,
             allocator,
             io,
         );
@@ -408,15 +408,18 @@ pub const Vm = struct {
     }
 
     pub fn snapshot(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot(VmSnapshotState) {
-        var snap = VmSnapshotState{};
-        errdefer snap.deinit(allocator);
-
         try self.stop();
+
+        for (0..self.cpu_count()) |c| {
+            try self.vcpus[c].?.wait_exit(io);
+        }
+
+        var snap = VmSnapshotState.new(try self.archvm.snapshot(allocator, io));
+        errdefer snap.deinit(allocator);
 
         for (0..self.cpu_count()) |c| {
             const cpu = self.vcpus[c].?;
 
-            try cpu.wait_exit(io);
             try snap.snapshot_cpu(try cpu.snapshot(), allocator);
         }
 

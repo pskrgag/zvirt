@@ -21,6 +21,18 @@ mmio_bus: *mmio_bus_struct,
 
 const Self = @This();
 
+pub const State = struct {
+    io: io_bus_struct.State,
+
+    pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
+        self.io.deinit(alloc);
+    }
+};
+
+pub fn snapshot(self: *Self, alloc: std.mem.Allocator, io: std.Io) !State {
+    return .{ .io = try self.io_bus.snapshot(alloc, io) };
+}
+
 pub fn attach_console(
     self: *Self,
     console: *const VmConsoleConfig,

@@ -17,6 +17,12 @@ pub fn serialize(T: type, val: T, writer: *Writer) !void {
                 try serialize(info.child, element, writer);
             }
         },
+        .optional => |info| {
+            try serialize(bool, val != null, writer);
+            if (val) |value| {
+                try serialize(info.child, value, writer);
+            }
+        },
         .@"struct" => {
             if (@hasDecl(T, "serialize")) {
                 return try val.serialize(writer);
@@ -65,6 +71,13 @@ pub fn deserialize(T: type, reader: *Reader, alloc: std.mem.Allocator) !T {
         .array => |info| {
             for (&res) |*element| {
                 element.* = try deserialize(info.child, reader, alloc);
+            }
+        },
+        .optional => |info| {
+            if (try deserialize(bool, reader, alloc)) {
+                res = try deserialize(info.child, reader, alloc);
+            } else {
+                res = null;
             }
         },
         .@"struct" => {

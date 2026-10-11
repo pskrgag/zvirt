@@ -77,7 +77,7 @@ fn test_snapshot_restore(serialized: bool) !void {
         errdefer decoded.data.deinit(allocator);
 
         try std.testing.expectEqual(snap.data.ram_size, decoded.data.ram_size);
-        try std.testing.expectEqualDeep(snap.data.device_state, decoded.data.device_state);
+        try std.testing.expectEqualDeep(snap.data.arch_state, decoded.data.arch_state);
         try std.testing.expectEqualDeep(snap.data.snapshoted_cpus(), decoded.data.snapshoted_cpus());
         try std.testing.expectEqualDeep(snap.data.snapshoted_memory(), decoded.data.snapshoted_memory());
 
@@ -138,7 +138,11 @@ test "Snapshot serialize cpu + ram" {
 
 test "Snapshot owns memory" {
     const allocator = std.testing.allocator;
-    var snap = VmSnapshotState{};
+    var snap = VmSnapshotState.new(.{
+        .mmio_alloc = .{ .gpa = 0 },
+        .irq_alloc = .{},
+        .device_bus = .{ .io = .{} },
+    });
     defer snap.deinit(allocator);
 
     var source = [_]u8{ 1, 2, 3, 4 };
@@ -154,7 +158,11 @@ test "Snapshot owns memory" {
 test "Snapshot memory allocation failure preserves existing entries" {
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 2 });
     const allocator = failing.allocator();
-    var snap = VmSnapshotState{};
+    var snap = VmSnapshotState.new(.{
+        .mmio_alloc = .{ .gpa = 0 },
+        .irq_alloc = .{},
+        .device_bus = .{ .io = .{} },
+    });
     defer snap.deinit(allocator);
 
     try snap.snapshot_memory(0x1000, &.{ 1, 2 }, allocator);

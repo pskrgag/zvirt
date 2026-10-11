@@ -39,6 +39,19 @@ const Com = struct {
     uart: ?device.uart_16550.Uart = null,
 };
 
+pub const State = struct {
+    uart: [MAX_COMS]?device.uart_16550.Uart.State = @splat(null),
+    pci: bool = false,
+
+    pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
+        for (&self.uart) |*entry| {
+            if (entry.*) |*uart| {
+                uart.deinit(alloc);
+            }
+        }
+    }
+};
+
 com: [MAX_COMS]Com = @splat(.{}),
 
 pci_bus_obj: ?*PciBus = null,
@@ -50,6 +63,22 @@ debug_cb: ?struct {
     ctx: *anyopaque,
     cb: *const fn (*anyopaque) void,
 } = null,
+
+pub fn snapshot(self: *Self, alloc: std.mem.Allocator, io: std.Io) !State {
+    var res = State{ .pci = self.pci_bus_obj != null };
+    errdefer res.deinit(alloc);
+
+    for (&self.com, 0..) |*port, i| {
+        try port.mutex.lock(io);
+        defer port.mutex.unlock(io);
+
+        if (port.uart) |*uart| {
+            res.uart[i] = try uart.snapshot(alloc);
+        }
+    }
+
+    return res;
+}
 
 pub fn pci_bus(self: *Self) ?*PciBus {
     if (self.pci_bus_obj) |obj| {

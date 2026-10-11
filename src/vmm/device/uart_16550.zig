@@ -113,6 +113,26 @@ pub const Uart = struct {
     irqfd: EventFd = undefined,
     irq_set: bool = false,
 
+    pub const State = struct {
+        // Store each register as its guest-visible byte, not its packed fields.
+        lcr: u8,
+        scr: u8,
+        mcr: u8,
+        ier: u8,
+        dll: u8,
+        dlh: u8,
+        lsr: u8,
+        iir: u8,
+        thre_pending: bool,
+        irq: u32,
+        irq_set: bool,
+        chardev: CharDev.State,
+
+        pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
+            self.chardev.deinit(alloc);
+        }
+    };
+
     const Self = @This();
 
     pub fn new(out: File, in: ?File, irq: u32, vm: *Vm, term: bool, alloc: std.mem.Allocator) !Self {
@@ -129,6 +149,24 @@ pub const Uart = struct {
     pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
         self.irqfd.deinit();
         self.chardev.deinit(alloc);
+    }
+
+    /// The caller must hold the COM lock or otherwise quiesce the UART.
+    pub fn snapshot(self: *const Self, alloc: std.mem.Allocator) !State {
+        return .{
+            .lcr = @bitCast(self.lcr),
+            .scr = self.scr,
+            .mcr = self.mcr,
+            .ier = @bitCast(self.ier),
+            .dll = self.dll,
+            .dlh = self.dlh,
+            .lsr = @bitCast(self.lsr),
+            .iir = @bitCast(self.iir),
+            .thre_pending = self.thre_pending,
+            .irq = self.irq,
+            .irq_set = self.irq_set,
+            .chardev = try self.chardev.snapshot(alloc),
+        };
     }
 
     pub fn handle_event(self: *Self, io: std.Io) !void {

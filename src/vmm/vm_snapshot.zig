@@ -4,23 +4,24 @@ const std = @import("std");
 const SerializableList = @import("snapshot/vector.zig").SerializableList;
 const VCpuState = @import("vcpu.zig").VCpuState;
 const MAX_VCPUS = @import("root.zig").MAX_VCPUS;
+const ArchVmState = @import("root.zig").arch.ArchVm.ArchVmState;
 
 pub const MemoryEntry = struct {
     start: u64,
     memory: []const u8,
 };
 
-pub const DeviceState = struct {
-    pci: bool = false,
-};
-
 pub const VmSnapshotState = struct {
     vcpus: SerializableList(VCpuState) = .{},
     memory: SerializableList(MemoryEntry) = .{},
     ram_size: usize = 0,
-    device_state: DeviceState = .{},
+    arch_state: ArchVmState,
 
     const Self = @This();
+
+    pub fn new(arch_state: ArchVmState) Self {
+        return .{ .arch_state = arch_state };
+    }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
         for (self.memory.list.items) |entry| {
@@ -29,6 +30,7 @@ pub const VmSnapshotState = struct {
 
         self.memory.deinit(alloc);
         self.vcpus.deinit(alloc);
+        self.arch_state.deinit(alloc);
     }
 
     pub fn snapshot_cpu(self: *Self, state: VCpuState, alloc: std.mem.Allocator) !void {
