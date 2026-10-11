@@ -134,8 +134,10 @@ pub const IoWorker = struct {
         try self.epoll.add_with_events(fd, flags, @bitCast(token));
     }
 
-    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
-        self.stop_flag.store(true, .monotonic);
+    pub fn stop_and_join(self: *Self, io: std.Io) void {
+        if (self.stop_flag.cmpxchgStrong(false, true, .monotonic, .monotonic) != null)
+            return;
+
         self.start_event.set(io);
 
         while (true) {
@@ -156,6 +158,10 @@ pub const IoWorker = struct {
         for (self.threads) |th| {
             th.join();
         }
+    }
+
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+        self.stop_and_join(io);
 
         self.epoll.deinit();
         self.shutdown_event.deinit();

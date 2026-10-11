@@ -126,11 +126,11 @@ pub const CharDev = struct {
                         switch (byte) {
                             'x' => {
                                 log.warn("Stopping VM by console request", .{});
-                                self.vm.stop() catch @panic("VM must be running");
+                                self.vm.stop_async() catch @panic("VM must be running");
 
                                 // Break the loop, since vm must be stopped anyway.
                                 self.pending_escape = false;
-                                break;
+                                return;
                             },
                             's' => {
                                 log.warn("Snapshotting VM", .{});

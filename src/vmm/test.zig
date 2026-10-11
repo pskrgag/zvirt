@@ -49,8 +49,7 @@ fn old_handler(_: std.posix.SIG) callconv(.c) void {
 // }
 
 fn vm_run_thread(vm: *Vm, allocator: std.mem.Allocator, io: std.Io) !void {
-    _ = allocator;
-    try vm.run(io);
+    try vm.run(io, allocator);
 }
 
 test "Console attach" {
@@ -112,7 +111,7 @@ test "Console attach" {
             .output = std.Io.File.stdout(),
         }, allocator));
 
-        try vm.stop();
+        try vm.stop_sync(io);
         thread.join();
     }
 }
@@ -136,8 +135,8 @@ test "Cannot run vm two times" {
     }, io, allocator);
     defer vm.deinit(allocator, io);
 
-    try vm.run(io);
-    try std.testing.expectError(error.AlreadyStarted, vm.run(io));
+    try vm.run(io, allocator);
+    try std.testing.expectError(error.AlreadyStarted, vm.run(io, allocator));
 }
 
 test "Cannot stop vm two times" {
@@ -161,9 +160,9 @@ test "Cannot stop vm two times" {
         }, io, allocator);
         defer vm.deinit(allocator, io);
 
-        try std.testing.expectError(error.InvalidState, vm.stop());
-        try vm.run(io);
-        try std.testing.expectError(error.InvalidState, vm.stop());
+        try std.testing.expectError(error.InvalidState, vm.stop_sync(io));
+        try vm.run(io, allocator);
+        try std.testing.expectError(error.InvalidState, vm.stop_sync(io));
     }
 
     {
@@ -186,8 +185,8 @@ test "Cannot stop vm two times" {
         // Busy loop until vm starts...
         while (vm.state.state.load(.monotonic) != .Running) {}
 
-        try vm.stop();
-        try std.testing.expectError(error.InvalidState, vm.stop());
+        try vm.stop_sync(io);
+        try std.testing.expectError(error.InvalidState, vm.stop_sync(io));
 
         thread.join();
     }
@@ -226,7 +225,7 @@ test "guest port write reaches COM1 UART" {
         .output = uart_output.file,
     }, allocator);
 
-    try vm.run(io);
+    try vm.run(io, allocator);
 
     var captured: [16]u8 = undefined;
     try std.testing.expectEqualStrings("H", try uart_output.read(&captured));
@@ -265,7 +264,7 @@ test "linux reaches shutdown" {
         .output = uart_output.file,
     }, allocator);
 
-    try vm.run(io);
+    try vm.run(io, allocator);
 }
 
 fn dump_whole_file(output: *const test_utils.TmpUartOutput) !void {
@@ -575,7 +574,7 @@ test "linux reaches console" {
     try wait_for_output(&uart_output, "login");
 
     // Stop the vm
-    try vm.stop();
+    try vm.stop_sync(io);
     thread.join();
 }
 
@@ -647,7 +646,7 @@ fn test_virtio_read(pci: bool, async: bool) !void {
     try wait_for_output(&uart_output, "END");
 
     // Stop the vm
-    try vm.stop();
+    try vm.stop_sync(io);
     thread.join();
 
     try expect_file_hash(&initrd_stdout, disk.file);
@@ -727,7 +726,7 @@ fn test_virtio_write(pci: bool, async: bool, smp: u8) !void {
 
     try wait_for_output(&uart_output, "END");
 
-    try vm.stop();
+    try vm.stop_sync(io);
     thread.join();
 
     const expected = hash_write_pattern(write_test_seed, write_test_size);
@@ -856,7 +855,7 @@ fn test_virtio_net(smp: u8, pci: bool) !void {
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
     defer {
-        vm.stop() catch {};
+        vm.stop_sync(io) catch {};
         thread.join();
     }
 
@@ -990,6 +989,6 @@ test "SMP works" {
     try input_writer.writeStreamingAll(io, "cat /proc/cpuinfo | grep 'initial apicid' | uniq | wc -l\n");
     try wait_for_output(&uart_output, "16");
 
-    try vm.stop();
+    try vm.stop_sync(io);
     thread.join();
 }

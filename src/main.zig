@@ -271,5 +271,5 @@ fn run() !void {
         .configure_terminal = false,
         .index = 1,
     }, allocator);
-    try vm.run(io);
+    try vm.run(io, allocator);
 }

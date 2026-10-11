@@ -113,6 +113,12 @@ const VmState = struct {
 
 const INVALID_CPU: u32 = std.math.maxInt(u32);
 
+pub const VmAction = enum(u32) {
+    None,
+    Stop,
+    Snapshot,
+};
+
 pub const Vm = struct {
     vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
@@ -124,9 +130,10 @@ pub const Vm = struct {
     old_sigaction: posix.Sigaction,
     archvm: arch.ArchVm,
     statistics: Statistics = Statistics.new(),
-    panic_cpu: std.atomic.Value(u32) = .init(INVALID_CPU),
+    action: std.atomic.Value(VmAction) = .init(.None),
     dump_stat: bool = false,
     ram_size: usize,
+    stop_event: std.Io.Event = .unset,
 
     const Self = @This();
 
@@ -343,7 +350,7 @@ pub const Vm = struct {
         return old;
     }
 
-    pub fn stop(self: *Vm) !void {
+    pub fn stop_sync(self: *Vm, io: std.Io) !void {
         if (self.state.state.cmpxchgStrong(
             .Running,
             .Stopped,
@@ -353,10 +360,21 @@ pub const Vm = struct {
             return error.InvalidState;
         }
 
-        for (self.vcpus) |vcpu| {
-            if (vcpu) |cpu|
-                cpu.stop();
+        self.request_action(.Stop);
+        try self.stop_event.wait(io);
+    }
+
+    pub fn stop_async(self: *Vm) !void {
+        if (self.state.state.cmpxchgStrong(
+            .Running,
+            .Stopped,
+            .monotonic,
+            .monotonic,
+        ) != null) {
+            return error.InvalidState;
         }
+
+        self.request_action(.Stop);
     }
 
     pub fn register_fd(
@@ -384,16 +402,7 @@ pub const Vm = struct {
             .vcpu => {
                 // Only abort when vCPU panicked
                 if (try self.vcpus[token.id].?.ack_event() != .None) {
-                    self.panic_cpu.store(token.id, .monotonic);
-
-                    _ = linux.futex(
-                        &self.panic_cpu,
-                        .{ .private = true, .cmd = .WAKE },
-                        1,
-                        .{ .timeout = null },
-                        null,
-                        0,
-                    );
+                    self.request_action(.Stop);
                 }
             },
             .io_bus, .virtio, .pci => {
@@ -407,13 +416,7 @@ pub const Vm = struct {
         }
     }
 
-    pub fn snapshot(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot(VmSnapshotState) {
-        try self.stop();
-
-        for (0..self.cpu_count()) |c| {
-            try self.vcpus[c].?.wait_exit(io);
-        }
-
+    fn snapshot_unsafe(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot(VmSnapshotState) {
         var snap = VmSnapshotState.new(try self.archvm.snapshot(allocator, io));
         errdefer snap.deinit(allocator);
 
@@ -431,7 +434,40 @@ pub const Vm = struct {
         return Snapshot(VmSnapshotState).new(snap);
     }
 
-    pub fn run(self: *Self, io: std.Io) !void {
+    pub fn request_snapshot(self: *Self) void {
+        self.request_action(.Snapshot);
+    }
+
+    pub fn snapshot(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot(VmSnapshotState) {
+        try self.stop_sync(io);
+        return try self.snapshot_unsafe(io, allocator);
+    }
+
+    fn request_action(self: *Self, action: VmAction) void {
+        _ = self.action.cmpxchgStrong(.None, action, .monotonic, .monotonic);
+
+        _ = linux.futex(
+            &self.action,
+            .{ .private = true, .cmd = .WAKE },
+            1,
+            .{ .timeout = null },
+            null,
+            0,
+        );
+    }
+
+    fn stop_internal(self: *Self, io: std.Io) !void {
+        for (self.vcpus) |vcpu| {
+            if (vcpu) |cpu| {
+                cpu.stop();
+                try cpu.wait_exit(io);
+            }
+        }
+
+        self.worker.stop_and_join(io);
+    }
+
+    pub fn run(self: *Self, io: std.Io, alloc: std.mem.Allocator) !void {
         if (self.state.state.cmpxchgStrong(
             .Initialized,
             .Running,
@@ -450,18 +486,38 @@ pub const Vm = struct {
 
         self.worker.start(io);
 
-        while (self.panic_cpu.load(.monotonic) == INVALID_CPU) {
+        while (self.action.load(.monotonic) == .None) {
             _ = linux.futex(
-                &self.panic_cpu,
+                &self.action,
                 .{ .private = true, .cmd = .WAIT },
-                INVALID_CPU,
+                @intFromEnum(VmAction.None),
                 .{ .timeout = null },
                 null,
                 0,
             );
         }
 
+        switch (self.action.load(.monotonic)) {
+            .Stop => try self.stop_internal(io),
+            .Snapshot => {
+                try self.stop_internal(io);
+
+                var snap = try self.snapshot_unsafe(io, alloc);
+                defer snap.data.deinit(alloc);
+
+                const file = try std.Io.Dir.cwd().openFile(io, "snapshot.zig", .{});
+                defer file.close(io);
+
+                var buffer: [4096]u8 = undefined;
+                var writer = file.writer(io, &buffer);
+
+                try snap.serialize(&writer.interface);
+            },
+            .None => @panic("Should not happen"),
+        }
+
         self.state.state.store(.Stopped, .monotonic);
+        self.stop_event.set(io);
     }
 };
 

@@ -44,9 +44,9 @@ fn test_snapshot_restore(serialized: bool) !void {
         var checkpoint = Checkpoint{ .vm = vm };
         vm.archvm.device_bus.io_bus.register_debug_port_cb(&checkpoint, Checkpoint.guest_exit);
 
-        const thread = try std.Thread.spawn(.{}, Vm.run, .{ vm, io });
+        const thread = try std.Thread.spawn(.{}, Vm.run, .{ vm, io, allocator });
         defer {
-            vm.stop() catch {};
+            vm.stop_sync(io) catch {};
             thread.join();
         }
 
@@ -105,9 +105,9 @@ fn test_snapshot_restore(serialized: bool) !void {
         .output = output.file,
     }, allocator);
 
-    const thread = try std.Thread.spawn(.{}, Vm.run, .{ restored, io });
+    const thread = try std.Thread.spawn(.{}, Vm.run, .{ restored, io, allocator });
     defer {
-        restored.stop() catch {};
+        restored.stop_sync(io) catch {};
         thread.join();
     }
 
