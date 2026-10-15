@@ -26,7 +26,7 @@ fn log_fn(
     std.log.defaultLog(level, scope, format, args);
 }
 
-const DEFAULT_MEMORY_SIZE = 1 << 30;
+const DEFAULT_MEMORY_SIZE = 500 << 20;
 
 var config = struct {
     kernel: []const u8 = "",
@@ -38,6 +38,7 @@ var config = struct {
     smp: []const u8 = "",
     enable_pci: bool = false,
     stat: bool = false,
+    snapshot: []const u8 = "",
     log_level: []const u8 = @tagName(std.log.Level.info),
     io: ?std.Io = null,
     allocator: ?std.mem.Allocator = null,
@@ -68,7 +69,6 @@ pub fn main(init: std.process.Init) !void {
                 .long_name = "kernel",
                 .help = "Kernel binary",
                 .value_ref = runner.mkRef(&config.kernel),
-                .required = true,
             }, .{
                 .short_alias = 'm',
                 .long_name = "memory",
@@ -102,6 +102,10 @@ pub fn main(init: std.process.Init) !void {
                 .long_name = "stat",
                 .help = "Enable statistics",
                 .value_ref = runner.mkRef(&config.stat),
+            }, .{
+                .long_name = "snapshot",
+                .help = "Restore from snapshot",
+                .value_ref = runner.mkRef(&config.snapshot),
             }, .{
                 .long_name = "log-level",
                 .help = "Global log level: err, warn, info, debug (default: " ++ @tagName(std.log.default_level) ++ ")",
@@ -208,27 +212,16 @@ fn run() !void {
     const io = config.io orelse return error.IoUnavailable;
     const allocator = config.allocator orelse return error.AllocatorUnavailable;
     const memory_size = try parse_memory(config.memory);
-    const kernel_bytes = try std.Io.Dir.cwd().readFileAlloc(
-        io,
-        config.kernel,
-        allocator,
-        .unlimited,
-    );
-    defer allocator.free(kernel_bytes);
     var initramfs: ?[]const u8 = null;
 
-    if (config.initramfs.len != 0) {
-        initramfs = try std.Io.Dir.cwd().readFileAlloc(
-            io,
-            config.initramfs,
-            allocator,
-            .unlimited,
-        );
-    }
+    if (config.snapshot.len != 0) {
+        const kernel_set = config.kernel.len != 0;
+        const initramfs_set = config.initramfs.len != 0;
 
-    defer {
-        if (initramfs) |data|
-            allocator.free(data);
+        if (kernel_set or initramfs_set) {
+            log.err("'kernel' and 'initramfs' do not make sense with 'snapshot'\n", .{});
+            return error.InvalidArgument;
+        }
     }
 
     var smp: u8 = 1;
@@ -244,32 +237,73 @@ fn run() !void {
     const b = try parse_block_device(config.block_device);
     const net = try parse_net_device(config.net_device);
 
-    var vm = try Vm.new(.{
-        .ram_size = memory_size,
-        .binary = kernel_bytes,
-        .initramfs = initramfs,
-        .device_config = .{
-            .block_device = if (b) |block| .{ .path = block.path, .async = block.async } else .{},
-            .network = if (net) |n| .{ .mac = n.mac, .iface = n.iface } else null,
-            .pci = config.enable_pci,
-        },
-        .cmdline = config.cmdline,
-        .smp = smp,
-        .stat = config.stat,
-    }, io, allocator);
+    var snap: ?zvirt.vmm.VmSnapshot = null;
+
+    defer {
+        if (snap) |*snapshot_state| {
+            snapshot_state.data.deinit(allocator);
+        }
+    }
+
+    if (config.snapshot.len != 0) {
+        snap = try Vm.read_snapshot_file(config.snapshot, allocator, io);
+    }
+
+    var vm = if (config.snapshot.len == 0) blk: {
+        const kernel_bytes = try std.Io.Dir.cwd().readFileAlloc(
+            io,
+            config.kernel,
+            allocator,
+            .unlimited,
+        );
+        defer allocator.free(kernel_bytes);
+
+        if (config.initramfs.len != 0) {
+            initramfs = try std.Io.Dir.cwd().readFileAlloc(
+                io,
+                config.initramfs,
+                allocator,
+                .unlimited,
+            );
+        }
+
+        defer {
+            if (initramfs) |data|
+                allocator.free(data);
+        }
+
+        break :blk try Vm.new(.{
+            .ram_size = memory_size,
+            .binary = kernel_bytes,
+            .initramfs = initramfs,
+            .device_config = .{
+                .block_device = if (b) |block| .{ .path = block.path, .async = block.async } else .{},
+                .network = if (net) |n| .{ .mac = n.mac, .iface = n.iface } else null,
+                .pci = config.enable_pci,
+            },
+            .cmdline = config.cmdline,
+            .smp = smp,
+            .stat = config.stat,
+        }, io, allocator);
+    } else blk: {
+        break :blk try Vm.from_snapshot(snap.?, allocator, io);
+    };
     defer vm.deinit(allocator, io);
+
+    log.err("Restored\n", .{});
 
     try vm.attach_console(.{
         .input = std.Io.File.stdin(),
         .output = std.Io.File.stdout(),
         .configure_terminal = true,
         .index = 0,
-    }, allocator);
+    }, snap, allocator);
 
     try vm.attach_console(.{
         .output = std.Io.File.stderr(),
         .configure_terminal = false,
         .index = 1,
-    }, allocator);
+    }, snap, allocator);
+
     try vm.run(io, allocator);
 }

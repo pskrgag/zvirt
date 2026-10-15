@@ -189,7 +189,7 @@ pub const Net = struct {
 
     fn proccess_rx_queue(self: *Self, pair: usize, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
         var reqs = try token.queue.kick(
-            vm.memory,
+            vm.archvm.memory,
             token.alloc.allocator(),
         );
 
@@ -223,7 +223,7 @@ pub const Net = struct {
 
     fn proccess_tx_queue(self: *Self, pair: usize, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
         var reqs = try token.queue.kick(
-            vm.memory,
+            vm.archvm.memory,
             token.alloc.allocator(),
         );
         var notify = false;
@@ -293,7 +293,7 @@ pub const Net = struct {
 
     fn proccess_control_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
         const reqs = try token.queue.kick(
-            vm.memory,
+            vm.archvm.memory,
             token.alloc.allocator(),
         );
         var notify = false;

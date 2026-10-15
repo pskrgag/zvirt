@@ -10,3 +10,6 @@ const implementation = switch (builtin.cpu.arch) {
 pub const ArchVm = implementation.ArchVm;
 pub const layout = implementation.layout;
 pub const setup_bs_vcpu = implementation.setup_bs_vcpu;
+pub const restore_cpu = implementation.restore_cpu;
+pub const snapshot_cpu = implementation.snapshot_cpu;
+pub const ArchVcpuState = implementation.ArchVcpuState;

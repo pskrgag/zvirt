@@ -14,7 +14,6 @@ pub const MemoryEntry = struct {
 pub const VmSnapshotState = struct {
     vcpus: SerializableList(VCpuState) = .{},
     memory: SerializableList(MemoryEntry) = .{},
-    ram_size: usize = 0,
     arch_state: ArchVmState,
 
     const Self = @This();

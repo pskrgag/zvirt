@@ -37,9 +37,12 @@ pub fn attach_console(
     self: *Self,
     console: *const VmConsoleConfig,
     vm: *Vm,
+    state: ?*const State,
     alloc: std.mem.Allocator,
 ) !void {
-    try self.io_bus.attach_console(console, vm, alloc);
+    const io_state = if (state) |snapshot_state| &snapshot_state.io else null;
+
+    try self.io_bus.attach_console(console, vm, io_state, alloc);
 }
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
@@ -76,6 +79,16 @@ pub fn handle_io(self: *Self, io_request: anytype, io: std.Io) !void {
 
 pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     return self.mmio_bus.handle_mmio(mmio_request, io);
+}
+
+pub fn from_snapshot(state: *const State, alloc: std.mem.Allocator, io: std.Io) !Self {
+    var mmio_bus = try mmio_bus_struct.new(alloc);
+    errdefer mmio_bus.deinit(alloc, io);
+
+    return .{
+        .mmio_bus = mmio_bus,
+        .io_bus = try io_bus_struct.from_snapshot(&state.io, alloc, io),
+    };
 }
 
 pub fn new(pci_range: ?layout.MemorySlot, alloc: std.mem.Allocator, io: std.Io) !Self {

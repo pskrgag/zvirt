@@ -184,7 +184,7 @@ fn VirtioPci(comptime Device: type) type {
                 @offsetOf(c.virtio_pci_common_cfg, "queue_desc_hi") => try self.device.core.set_queue_desc_high(self.queue_select, value, io),
                 @offsetOf(c.virtio_pci_common_cfg, "queue_used_lo") => try self.device.core.set_queue_used_low(self.queue_select, value, io),
                 @offsetOf(c.virtio_pci_common_cfg, "queue_used_hi") => try self.device.core.set_queue_used_high(self.queue_select, value, io),
-                @offsetOf(c.virtio_pci_common_cfg, "queue_enable") => try self.device.core.set_queue_ready(self.queue_select, self.pci.vm.memory, value, io),
+                @offsetOf(c.virtio_pci_common_cfg, "queue_enable") => try self.device.core.set_queue_ready(self.queue_select, self.pci.vm.archvm.memory, value, io),
                 @offsetOf(c.virtio_pci_common_cfg, "queue_msix_vector") => {
                     if (self.queue_select < self.queue_vectors.len)
                         self.queue_vectors[self.queue_select].store(value, .monotonic);

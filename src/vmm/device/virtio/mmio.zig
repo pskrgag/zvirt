@@ -152,7 +152,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                     },
                     .DeviceFeaturesSel => self.device_sel = data != 0,
                     .DriverFeaturesSel => self.driver_sel = data != 0,
-                    .QueueReady => try self.device.core.set_queue_ready(self.queue_sel, self.vm.memory, data, io),
+                    .QueueReady => try self.device.core.set_queue_ready(self.queue_sel, self.vm.archvm.memory, data, io),
                     .QueueNum => try self.device.core.set_queue_num(self.queue_sel, data, io),
                     .QueueDescLow => try self.device.core.set_queue_desc_low(self.queue_sel, data, io),
                     .QueueDescHigh => try self.device.core.set_queue_desc_high(self.queue_sel, data, io),

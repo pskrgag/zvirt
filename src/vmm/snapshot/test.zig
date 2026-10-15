@@ -76,7 +76,7 @@ fn test_snapshot_restore(serialized: bool) !void {
         var decoded = try Snapshot.deserialize(&reader.interface, allocator);
         errdefer decoded.data.deinit(allocator);
 
-        try std.testing.expectEqual(snap.data.ram_size, decoded.data.ram_size);
+        try std.testing.expectEqual(snap.data.arch_state.ram_size, decoded.data.arch_state.ram_size);
         try std.testing.expectEqualDeep(snap.data.arch_state, decoded.data.arch_state);
         try std.testing.expectEqualDeep(snap.data.snapshoted_cpus(), decoded.data.snapshoted_cpus());
         try std.testing.expectEqualDeep(snap.data.snapshoted_memory(), decoded.data.snapshoted_memory());
@@ -103,7 +103,7 @@ fn test_snapshot_restore(serialized: bool) !void {
     try restored.attach_console(.{
         .index = 0,
         .output = output.file,
-    }, allocator);
+    }, snap, allocator);
 
     const thread = try std.Thread.spawn(.{}, Vm.run, .{ restored, io, allocator });
     defer {
@@ -139,9 +139,12 @@ test "Snapshot serialize cpu + ram" {
 test "Snapshot owns memory" {
     const allocator = std.testing.allocator;
     var snap = VmSnapshotState.new(.{
+        .ram_size = 0,
         .mmio_alloc = .{ .gpa = 0 },
         .irq_alloc = .{},
         .device_bus = .{ .io = .{} },
+        .pit = .{},
+        .irqchip = std.mem.zeroes(@import("kvm").Vm.IrqState),
     });
     defer snap.deinit(allocator);
 
@@ -159,9 +162,12 @@ test "Snapshot memory allocation failure preserves existing entries" {
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 2 });
     const allocator = failing.allocator();
     var snap = VmSnapshotState.new(.{
+        .ram_size = 0,
         .mmio_alloc = .{ .gpa = 0 },
         .irq_alloc = .{},
         .device_bus = .{ .io = .{} },
+        .pit = .{},
+        .irqchip = std.mem.zeroes(@import("kvm").Vm.IrqState),
     });
     defer snap.deinit(allocator);
 

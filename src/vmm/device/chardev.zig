@@ -51,14 +51,33 @@ pub const CharDev = struct {
 
     const Self = @This();
 
-    pub fn new(out: File, in: ?File, vm: *Vm, rx_queue_size: usize, term: bool, alloc: std.mem.Allocator) !Self {
+    pub fn new(
+        out: File,
+        in: ?File,
+        vm: *Vm,
+        rx_queue_size: usize,
+        state: ?*const State,
+        term: bool,
+        alloc: std.mem.Allocator,
+    ) !Self {
         const storage = try alloc.alloc(u8, rx_queue_size);
         errdefer alloc.free(storage);
+
+        var rx_queue = std.Deque(u8).initBuffer(storage);
+        var pending_escape = false;
+
+        if (state) |snapshot_state| {
+            for (snapshot_state.rx_queue) |byte| {
+                try rx_queue.pushBackBounded(byte);
+            }
+            pending_escape = snapshot_state.pending_escape;
+        }
 
         const orig_tcattr = if (term)
             try setup_terminal(out.handle)
         else
             null;
+
         errdefer {
             if (orig_tcattr) |tcattr| {
                 posix.tcsetattr(out.handle, .NOW, tcattr) catch @panic("failed to restore term");
@@ -70,8 +89,9 @@ pub const CharDev = struct {
             .out = out,
             .vm = vm,
             .storage = storage,
-            .rx_queue = std.Deque(u8).initBuffer(storage),
+            .rx_queue = rx_queue,
             .orig_tcattr = orig_tcattr,
+            .pending_escape = pending_escape,
         };
     }
 
@@ -134,6 +154,7 @@ pub const CharDev = struct {
                             },
                             's' => {
                                 log.warn("Snapshotting VM", .{});
+                                self.vm.request_snapshot();
                             },
                             else => {},
                         }

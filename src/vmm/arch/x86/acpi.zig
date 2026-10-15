@@ -7,7 +7,7 @@ const std = @import("std");
 const layout = @import("layout.zig");
 
 pub fn setup_tables(vm: *Vm) !void {
-    const slice = vm.memory.as_slice(layout.BOOT_ACPI_ADDR, layout.BOOT_ACPI_SIZE).?;
+    const slice = vm.archvm.memory.as_slice(layout.BOOT_ACPI_ADDR, layout.BOOT_ACPI_SIZE).?;
     var bump = std.heap.FixedBufferAllocator.init(slice);
     const allocator = bump.allocator();
 

@@ -24,9 +24,7 @@ const ExitReason = std.atomic.Value(VCpuExitReason);
 
 pub const VCpuState = extern struct {
     num: u8,
-    regs: kvm.vcpu.Regs,
-    sregs: kvm.vcpu.Sregs,
-    sregs2: kvm.vcpu.Sregs2,
+    arch: arch.ArchVcpuState,
 };
 
 pub const VCpu = struct {
@@ -43,7 +41,7 @@ pub const VCpu = struct {
     const Self = @This();
 
     pub fn new(vm: *Vm, num: u32, ep: u64, io: std.Io, alloc: std.mem.Allocator) !*Self {
-        var c = try vm.vm.create_vcpu(num, 16);
+        var c = try vm.archvm.vm.create_vcpu(num, 16);
         errdefer c.deinit();
 
         const self = try alloc.create(Self);
@@ -103,17 +101,15 @@ pub const VCpu = struct {
 
     pub fn snapshot(self: *const Self) !VCpuState {
         // TODO: check that CPU is not running
-        const regs = try self.cpu.get_regs();
-        const sregs = try self.cpu.get_sregs();
-        const sregs2 = try self.cpu.get_sregs2();
 
-        return .{ .regs = regs, .sregs = sregs, .sregs2 = sregs2, .num = @intCast(self.num) };
+        return .{
+            .arch = try arch.snapshot_cpu(&self.cpu),
+            .num = @intCast(self.num),
+        };
     }
 
     pub fn restore(self: *Self, state: VCpuState) !void {
-        try self.cpu.set_regs(&state.regs);
-        try self.cpu.set_sregs(&state.sregs);
-        try self.cpu.set_sregs2(&state.sregs2);
+        try arch.restore_cpu(&self.cpu, &state.arch);
     }
 
     pub fn wait_exit(self: *Self, io: std.Io) !void {
@@ -153,6 +149,7 @@ pub const VCpu = struct {
                 break;
             };
 
+            // log.warn("reason {any}\n", .{reason});
             switch (reason) {
                 .Io => |io_req| {
                     self.vm.stats().inc(.vmexit_io);

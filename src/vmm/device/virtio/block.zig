@@ -149,7 +149,7 @@ pub const Block = struct {
         defer self.core.unlock_queue(token, io);
 
         var reqs = try token.queue.kick(
-            vm.memory,
+            vm.archvm.memory,
             token.alloc.allocator(),
         );
 

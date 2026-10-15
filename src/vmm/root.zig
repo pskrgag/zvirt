@@ -18,6 +18,8 @@ const io_worker = utils.IoWorker;
 const Snapshot = @import("snapshot/root.zig").Snapshot;
 const VmSnapshotState = @import("vm_snapshot.zig").VmSnapshotState;
 
+pub const VmSnapshot = Snapshot(VmSnapshotState);
+
 pub const IoResult = kvm.IoResult;
 
 const memory = @import("memory.zig");
@@ -120,11 +122,9 @@ pub const VmAction = enum(u32) {
 };
 
 pub const Vm = struct {
-    vm: kvm.Vm,
     vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
     vcpus_count: usize = 0,
     io: std.Io,
-    memory: *memory.GuestMemory,
     worker: *io_worker.IoWorker,
     state: VmState = .{},
     old_sigaction: posix.Sigaction,
@@ -132,7 +132,6 @@ pub const Vm = struct {
     statistics: Statistics = Statistics.new(),
     action: std.atomic.Value(VmAction) = .init(.None),
     dump_stat: bool = false,
-    ram_size: usize,
     stop_event: std.Io.Event = .unset,
 
     const Self = @This();
@@ -140,17 +139,25 @@ pub const Vm = struct {
     pub fn new(config: VmConfig, io: std.Io, allocator: std.mem.Allocator) !*Self {
         try config.verify();
 
+        var archvm = try arch.ArchVm.new(config.ram_size, config.device_config.pci, allocator, io);
+        var archvm_cleanup: ?*arch.ArchVm = &archvm;
+
+        errdefer {
+            if (archvm_cleanup) |a|
+                a.deinit(allocator, io);
+        }
+
         var self = try Self.empty(
-            config.ram_size,
+            archvm,
             config.worker_threads,
-            config.device_config.pci,
             allocator,
             io,
         );
         errdefer self.deinit(allocator, io);
+        archvm_cleanup = null;
 
         // Parse image (tho it should not write to memory, but it does for some reason)
-        const img = try image.parse(config.binary, self.memory, &config);
+        const img = try image.parse(config.binary, self.archvm.memory, &config);
 
         // Create BS cpu
         try self.create_vcpu(img.ep, 0, io, allocator);
@@ -167,22 +174,58 @@ pub const Vm = struct {
         return self;
     }
 
+    pub fn from_snapshot_file(
+        path: []const u8,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+    ) !*Self {
+        var snap = try Self.read_snapshot_file(path, allocator, io);
+        defer snap.data.deinit(allocator);
+
+        return Self.from_snapshot(snap, allocator, io);
+    }
+
+    pub fn read_snapshot_file(
+        path: []const u8,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+    ) !VmSnapshot {
+        const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+        defer file.close(io);
+
+        var buffer: [2 << 20]u8 = undefined;
+        var reader = file.reader(io, &buffer);
+
+        return VmSnapshot.deserialize(&reader.interface, allocator);
+    }
+
     pub fn from_snapshot(
         snap: Snapshot(VmSnapshotState),
         allocator: std.mem.Allocator,
         io: std.Io,
     ) !*Self {
+        var archvm = try arch.ArchVm.from_snapshot(&snap.data.arch_state, allocator, io);
+        var archvm_cleanup: ?*arch.ArchVm = &archvm;
+
+        errdefer {
+            if (archvm_cleanup) |a|
+                a.deinit(allocator, io);
+        }
+
         var self = try Self.empty(
-            snap.data.ram_size,
+            archvm,
             1,
-            snap.data.arch_state.device_bus.io.pci,
             allocator,
             io,
         );
+        archvm_cleanup = null;
         errdefer self.deinit(allocator, io);
 
         for (snap.data.snapshoted_memory()) |reg| {
-            const slice = self.memory.as_slice(reg.start, reg.memory.len) orelse return error.InvalidSnapshot;
+            const slice = self.archvm.memory.as_slice(
+                reg.start,
+                reg.memory.len,
+            ) orelse return error.InvalidSnapshot;
 
             @memcpy(slice, reg.memory);
         }
@@ -196,49 +239,19 @@ pub const Vm = struct {
     }
 
     fn empty(
-        ram_size: usize,
+        archvm: arch.ArchVm,
         worker_threads: usize,
-        pci: bool,
         allocator: std.mem.Allocator,
         io: std.Io,
     ) !*Self {
-        const system = try kvm_system.get();
         const self = try allocator.create(Self);
         errdefer allocator.destroy(self);
-
-        // NOTE: steps are documented for my own sanity, since I don't remember the code I've
-        // written like a month ago.
-
-        // Create empty KVM VM
-        var vm = try system.create_vm();
-        errdefer vm.deinit();
-
-        // Setup IRQchip
-        try vm.create_irqchip();
-
-        // Empty guest memory
-        var mem = try memory.GuestMemory.new(allocator);
-        errdefer mem.deinit(allocator);
-
-        const layout = arch.layout.memory_layout(ram_size);
-
-        // Empty archvm
-        var archvm = try arch.ArchVm.new(&layout, pci, &vm, mem, allocator, io);
-        var archvm_cleanup = &archvm;
-        errdefer archvm_cleanup.deinit(allocator, io);
-
-        // Map regions into kvm
-        for (mem.get_regions()) |reg| {
-            try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
-        }
 
         // Setup signal handler for vCPU kick.
         const old = Self.setup_sighandler();
         errdefer Self.restore_sighandler(old);
 
         self.* = .{
-            .vm = vm,
-            .memory = mem,
             .io = io,
             .worker = try io_worker.IoWorker.new(
                 worker_threads,
@@ -248,7 +261,6 @@ pub const Vm = struct {
             ),
             .old_sigaction = old,
             .archvm = archvm,
-            .ram_size = ram_size,
         };
 
         return self;
@@ -263,19 +275,26 @@ pub const Vm = struct {
     }
 
     // thread-unsafe
-    pub fn attach_console(self: *Self, console: VmConsoleConfig, alloc: std.mem.Allocator) !void {
-        if (self.state.state.load(.monotonic) != .Initialized)
+    pub fn attach_console(
+        self: *Self,
+        console: VmConsoleConfig,
+        snap: ?VmSnapshot,
+        alloc: std.mem.Allocator,
+    ) !void {
+        if (self.state.state.load(.monotonic) != .Initialized) {
             return error.InvalidState;
+        }
 
-        try self.archvm.attach_console(&console, self, alloc);
+        const state = if (snap) |*snapshot_state| &snapshot_state.data.arch_state else null;
+        try self.archvm.attach_console(&console, self, state, alloc);
     }
 
     pub fn register_irq(self: *Self, eventfd: *const EventFd, num: u32) !void {
-        try self.vm.register_irq(eventfd, num);
+        try self.archvm.vm.register_irq(eventfd, num);
     }
 
     pub fn msi_signal(self: *const Self, address_lo: u32, address_hi: u32, data: u32) !void {
-        try self.vm.msi_signal(address_lo, address_hi, data);
+        try self.archvm.vm.msi_signal(address_lo, address_hi, data);
     }
 
     pub fn register_ioevent(
@@ -285,7 +304,7 @@ pub const Vm = struct {
         len: u32,
         datamatch: u64,
     ) !void {
-        try self.vm.register_ioevent(eventfd, address, len, datamatch);
+        try self.archvm.vm.register_ioevent(eventfd, address, len, datamatch);
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
@@ -309,8 +328,8 @@ pub const Vm = struct {
         }
 
         self.archvm.deinit(alloc, io);
-        self.vm.deinit();
-        self.memory.deinit(alloc);
+        self.archvm.vm.deinit();
+        self.archvm.memory.deinit(alloc);
         // Self.restore_sighandler(self.old_sigaction);
         alloc.destroy(self);
     }
@@ -416,8 +435,12 @@ pub const Vm = struct {
         }
     }
 
-    fn snapshot_unsafe(self: *Self, io: std.Io, allocator: std.mem.Allocator) !Snapshot(VmSnapshotState) {
-        var snap = VmSnapshotState.new(try self.archvm.snapshot(allocator, io));
+    fn snapshot_unsafe(
+        self: *Self,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+    ) !Snapshot(VmSnapshotState) {
+        var snap = VmSnapshotState.new(try self.archvm.snapshot(self, allocator, io));
         errdefer snap.deinit(allocator);
 
         for (0..self.cpu_count()) |c| {
@@ -426,11 +449,10 @@ pub const Vm = struct {
             try snap.snapshot_cpu(try cpu.snapshot(), allocator);
         }
 
-        for (self.memory.get_regions()) |reg| {
+        for (self.archvm.memory.get_regions()) |reg| {
             try snap.snapshot_memory(reg.gpa, reg.raw, allocator);
         }
 
-        snap.ram_size = self.ram_size;
         return Snapshot(VmSnapshotState).new(snap);
     }
 
@@ -505,13 +527,16 @@ pub const Vm = struct {
                 var snap = try self.snapshot_unsafe(io, alloc);
                 defer snap.data.deinit(alloc);
 
-                const file = try std.Io.Dir.cwd().openFile(io, "snapshot.zig", .{});
+                const file = try std.Io.Dir.cwd().createFile(io, "snapshot.zig", .{
+                    .exclusive = true,
+                });
                 defer file.close(io);
 
                 var buffer: [4096]u8 = undefined;
                 var writer = file.writer(io, &buffer);
 
                 try snap.serialize(&writer.interface);
+                try writer.flush();
             },
             .None => @panic("Should not happen"),
         }

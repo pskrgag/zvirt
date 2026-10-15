@@ -19,6 +19,7 @@ pub fn serialize(T: type, val: T, writer: *Writer) !void {
         },
         .optional => |info| {
             try serialize(bool, val != null, writer);
+
             if (val) |value| {
                 try serialize(info.child, value, writer);
             }

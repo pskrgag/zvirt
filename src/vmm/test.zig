@@ -76,12 +76,12 @@ test "Console attach" {
         try vm.attach_console(.{
             .index = 0,
             .output = std.Io.File.stdout(),
-        }, allocator);
+        }, null, allocator);
 
         if (vm.attach_console(.{
             .index = 0,
             .output = std.Io.File.stdout(),
-        }, allocator)) |_| {
+        }, null, allocator)) |_| {
             return error.TestExpectedError;
         } else |_| {}
     }
@@ -109,7 +109,7 @@ test "Console attach" {
         try std.testing.expectError(error.InvalidState, vm.attach_console(.{
             .index = 0,
             .output = std.Io.File.stdout(),
-        }, allocator));
+        }, null, allocator));
 
         try vm.stop_sync(io);
         thread.join();
@@ -223,7 +223,7 @@ test "guest port write reaches COM1 UART" {
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     try vm.run(io, allocator);
 
@@ -262,7 +262,7 @@ test "linux reaches shutdown" {
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     try vm.run(io, allocator);
 }
@@ -446,7 +446,7 @@ test "linux login and reboot" {
         .index = 0,
         .input = uart_input,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
@@ -521,7 +521,7 @@ test "vCPU handles unknown exit reason gracefully" {
         .index = 0,
         .input = uart_input,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
     try login_in_initrd(&uart_output, &input_writer);
@@ -568,7 +568,7 @@ test "linux reaches console" {
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
     try wait_for_output(&uart_output, "login");
@@ -635,11 +635,11 @@ fn test_virtio_read(pci: bool, async: bool) !void {
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
     try vm.attach_console(.{
         .index = 1,
         .output = initrd_stdout.file,
-    }, allocator);
+    }, null, allocator);
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
@@ -720,7 +720,7 @@ fn test_virtio_write(pci: bool, async: bool, smp: u8) !void {
     try vm.attach_console(.{
         .index = 0,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
@@ -850,7 +850,7 @@ fn test_virtio_net(smp: u8, pci: bool) !void {
         .index = 0,
         .input = uart_input,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 
@@ -976,7 +976,7 @@ test "SMP works" {
         .index = 0,
         .input = uart_input,
         .output = uart_output.file,
-    }, allocator);
+    }, null, allocator);
 
     const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
 

@@ -98,6 +98,7 @@ pub fn attach_console(
     self: *Self,
     console: *const VmConsoleConfig,
     vm: *Vm,
+    state: ?*const State,
     alloc: std.mem.Allocator,
 ) !void {
     if (console.index >= MAX_COMS) {
@@ -116,11 +117,17 @@ pub fn attach_console(
     else
         3;
 
+    const uart_state = if (state) |snapshot_state|
+        if (snapshot_state.uart[index]) |*uart| uart else null
+    else
+        null;
+
     port.uart = try device.uart_16550.Uart.new(
         console.output,
         console.input,
         irq,
         vm,
+        uart_state,
         console.configure_terminal,
         alloc,
     );
@@ -142,6 +149,13 @@ pub fn new(pci_range: ?MemorySlot, alloc: std.mem.Allocator) !Self {
     }
 
     return self;
+}
+
+pub fn from_snapshot(state: *const State, alloc: std.mem.Allocator, io: std.Io) !Self {
+    std.debug.assert(state.pci == false);
+    _ = io;
+
+    return Self.new(null, alloc);
 }
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {

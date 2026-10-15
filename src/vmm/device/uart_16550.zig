@@ -135,14 +135,43 @@ pub const Uart = struct {
 
     const Self = @This();
 
-    pub fn new(out: File, in: ?File, irq: u32, vm: *Vm, term: bool, alloc: std.mem.Allocator) !Self {
-        var chardev = try CharDev.new(out, in, vm, 1024, term, alloc);
+    pub fn new(
+        out: File,
+        in: ?File,
+        irq: u32,
+        vm: *Vm,
+        state: ?*const State,
+        term: bool,
+        alloc: std.mem.Allocator,
+    ) !Self {
+        const chardev_state = if (state) |snapshot_state| &snapshot_state.chardev else null;
+        var chardev = try CharDev.new(out, in, vm, 1024, chardev_state, term, alloc);
         errdefer chardev.deinit(alloc);
 
         var irqfd = try EventFd.new(0);
         errdefer irqfd.deinit();
 
-        try vm.register_irq(&irqfd, irq);
+        const restored_irq = if (state) |snapshot_state| snapshot_state.irq else irq;
+        try vm.register_irq(&irqfd, restored_irq);
+
+        if (state) |snapshot_state| {
+            return .{
+                .chardev = chardev,
+                .lcr = @bitCast(snapshot_state.lcr),
+                .scr = snapshot_state.scr,
+                .mcr = snapshot_state.mcr,
+                .ier = @bitCast(snapshot_state.ier),
+                .dll = snapshot_state.dll,
+                .dlh = snapshot_state.dlh,
+                .lsr = @bitCast(snapshot_state.lsr),
+                .iir = @bitCast(snapshot_state.iir),
+                .thre_pending = snapshot_state.thre_pending,
+                .irq = restored_irq,
+                .irqfd = irqfd,
+                .irq_set = snapshot_state.irq_set,
+            };
+        }
+
         return .{ .chardev = chardev, .irq = irq, .irqfd = irqfd };
     }
 
