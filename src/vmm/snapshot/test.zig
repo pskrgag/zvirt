@@ -87,8 +87,8 @@ fn test_snapshot_restore(serialized: bool) !void {
 
     const cpus = snap.data.snapshoted_cpus();
     try std.testing.expectEqual(@as(usize, 1), cpus.len);
-    try std.testing.expectEqual(@as(u64, 9), cpus[0].regs.rcx);
-    try std.testing.expectEqual(@as(u64, 10), cpus[0].regs.rax);
+    try std.testing.expectEqual(@as(u64, 9), cpus[0].arch.regs.rcx);
+    try std.testing.expectEqual(@as(u64, 10), cpus[0].arch.regs.rax);
 
     var output = try test_utils.TmpUartOutput.create();
     defer output.deinit();
