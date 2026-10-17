@@ -17,6 +17,7 @@ const Statistics = stat.Statistics;
 const io_worker = utils.IoWorker;
 const Snapshot = @import("snapshot/root.zig").Snapshot;
 const VmSnapshotState = @import("vm_snapshot.zig").VmSnapshotState;
+const mmap = test_utils.mmap;
 
 pub const VmSnapshot = Snapshot(VmSnapshotState);
 
@@ -182,10 +183,20 @@ pub const Vm = struct {
         const file = try std.Io.Dir.cwd().openFile(io, path, .{});
         defer file.close(io);
 
-        var buffer: [2 << 20]u8 = undefined;
-        var reader = file.reader(io, &buffer);
+        const st = try file.stat(io);
 
-        return VmSnapshot.deserialize(&reader.interface, allocator);
+        const buffer = try mmap.mmap(
+            null,
+            st.size,
+            .{ .READ = true },
+            .{ .TYPE = .SHARED },
+            file.handle,
+            0,
+        );
+        defer mmap.munmap(buffer);
+
+        var reader = std.Io.Reader.fixed(buffer);
+        return VmSnapshot.deserialize(&reader, allocator);
     }
 
     pub fn from_snapshot(

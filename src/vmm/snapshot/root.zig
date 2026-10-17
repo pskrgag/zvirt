@@ -22,6 +22,7 @@ pub fn Snapshot(T: type) type {
         pub fn deserialize(reader: *std.Io.Reader, alloc: std.mem.Allocator) !Self {
             var encoded_magic: [magic.len]u8 = undefined;
             try reader.readSliceAll(&encoded_magic);
+
             if (!std.mem.eql(u8, &encoded_magic, &magic)) {
                 return error.InvalidMagic;
             }

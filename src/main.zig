@@ -286,11 +286,12 @@ fn run() !void {
             .stat = config.stat,
         }, io, allocator);
     } else blk: {
-        break :blk try Vm.from_snapshot(snap.?, allocator, io);
+        const res = try Vm.from_snapshot(snap.?, allocator, io);
+
+        log.info("Snapshot restored\n", .{});
+        break :blk res;
     };
     defer vm.deinit(allocator, io);
-
-    log.err("Restored\n", .{});
 
     try vm.attach_console(.{
         .input = std.Io.File.stdin(),

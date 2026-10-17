@@ -5,6 +5,29 @@ const Writer = std.Io.Writer;
 const Reader = std.Io.Reader;
 const SerializableList = @import("vector.zig").SerializableList;
 
+fn is_pod_type(T: type) bool {
+    const type_info = @typeInfo(T);
+
+    return switch (type_info) {
+        .int, .bool, .float => true,
+        .@"struct" => blk: {
+            var res = true;
+
+            // Special serializer means unusual type
+            if (@hasDecl(T, "serialize")) {
+                break :blk false;
+            }
+
+            inline for (std.meta.fields(T)) |field| {
+                res &= is_pod_type(field.type);
+            }
+
+            break :blk res;
+        },
+        else => false,
+    };
+}
+
 pub fn serialize(T: type, val: T, writer: *Writer) !void {
     const type_info = @typeInfo(T);
 
@@ -46,8 +69,13 @@ pub fn serialize(T: type, val: T, writer: *Writer) !void {
                     }
 
                     try serialize(u64, @intCast(val.len), writer);
-                    for (val) |element| {
-                        try serialize(info.child, element, writer);
+
+                    if (comptime is_pod_type(info.child)) {
+                        try writer.writeAll(std.mem.sliceAsBytes(val));
+                    } else {
+                        for (val) |element| {
+                            try serialize(info.child, element, writer);
+                        }
                     }
                 },
                 .many, .c => {
@@ -104,14 +132,22 @@ pub fn deserialize(T: type, reader: *Reader, alloc: std.mem.Allocator) !T {
                         @compileError("Sentinel-terminated slices are not supported");
                     }
 
-                    const encoded_len = try deserialize(u64, reader, alloc);
-                    const len = std.math.cast(usize, encoded_len) orelse return error.InvalidLength;
+                    const len = std.math.cast(
+                        usize,
+                        try deserialize(u64, reader, alloc),
+                    ) orelse return error.InvalidLength;
+
                     const elements = try alloc.alloc(info.child, len);
                     errdefer alloc.free(elements);
 
-                    for (elements) |*element| {
-                        element.* = try deserialize(info.child, reader, alloc);
+                    if (comptime is_pod_type(info.child)) {
+                        try reader.readSliceAll(std.mem.sliceAsBytes((elements)));
+                    } else {
+                        for (elements) |*element| {
+                            element.* = try deserialize(info.child, reader, alloc);
+                        }
                     }
+
                     res = elements;
                 },
                 .many, .c => {
