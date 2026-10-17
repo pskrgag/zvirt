@@ -174,17 +174,6 @@ pub const Vm = struct {
         return self;
     }
 
-    pub fn from_snapshot_file(
-        path: []const u8,
-        allocator: std.mem.Allocator,
-        io: std.Io,
-    ) !*Self {
-        var snap = try Self.read_snapshot_file(path, allocator, io);
-        defer snap.data.deinit(allocator);
-
-        return Self.from_snapshot(snap, allocator, io);
-    }
-
     pub fn read_snapshot_file(
         path: []const u8,
         allocator: std.mem.Allocator,

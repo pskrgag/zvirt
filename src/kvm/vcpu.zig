@@ -74,7 +74,6 @@ pub const IoResult = union(enum) {
 
 pub const Vcpu = struct {
     fd: posix.fd_t,
-    // Borrowed descriptors; the VM and KVM system must outlive the vCPU.
     vm_fd: posix.fd_t,
     kvm_fd: posix.fd_t,
     run: *c.kvm_run,
