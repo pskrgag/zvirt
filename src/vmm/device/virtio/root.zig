@@ -89,7 +89,11 @@ const VirtQueueState = struct {
         };
     }
 
-    pub fn from_snapshot(snap: *const State, memory: *GuestMemory, allocator: std.mem.Allocator,) !Self {
+    pub fn from_snapshot(
+        snap: *const State,
+        memory: *GuestMemory,
+        allocator: std.mem.Allocator,
+    ) !Self {
         var notifyfd = try EventFd.new(0);
         errdefer notifyfd.deinit();
 

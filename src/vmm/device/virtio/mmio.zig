@@ -342,7 +342,7 @@ pub const VirtioMmioDevice = union(enum) {
                 dev.* = try VirtioMmio(Block).from_snapshot(block_state, device, vm);
                 break :blk .{ .block = dev };
             },
-            .net => @panic("todo")
+            .net => @panic("todo"),
         };
     }
 
