@@ -62,6 +62,13 @@ pub const FileEngine = union(enum) {
 
     const Self = @This();
 
+    pub fn is_async(self: *const Self) bool {
+        return switch (self.*) {
+            .Async => true,
+            .Sync => false,
+        };
+    }
+
     pub fn ack_event(self: *Self) !void {
         // Work around Zig's union-switch payload copy triggering a TSAN report.
         @disableInstrumentation();

@@ -133,7 +133,7 @@ fn parse_memory(memory: []const u8) !usize {
 }
 
 // TODO: move it to own lib and unit test it
-fn parse_block_device(data: []const u8) !?struct { path: []const u8, async: bool } {
+fn parse_block_device(data: []const u8, snap: bool) !?struct { path: []const u8, async: bool } {
     var parts = std.mem.splitScalar(u8, data, ',');
     var path: []const u8 = "";
     var async: ?bool = null;
@@ -152,6 +152,13 @@ fn parse_block_device(data: []const u8) !?struct { path: []const u8, async: bool
 
             path = value;
         } else if (std.mem.eql(u8, key, "engine")) {
+            if (snap) {
+                log.warn(
+                    "File engine will be inherited from snapshot. Ignoring cmdline argument",
+                    .{},
+                );
+            }
+
             if (async != null)
                 return error.AlreadySet;
 
@@ -234,9 +241,6 @@ fn run() !void {
         }
     }
 
-    const b = try parse_block_device(config.block_device);
-    const net = try parse_net_device(config.net_device);
-
     var snap: ?zvirt.vmm.VmSnapshot = null;
 
     defer {
@@ -248,6 +252,9 @@ fn run() !void {
     if (config.snapshot.len != 0) {
         snap = try Vm.read_snapshot_file(config.snapshot, allocator, io);
     }
+
+    const b = try parse_block_device(config.block_device, snap != null);
+    const net = try parse_net_device(config.net_device);
 
     var vm = if (config.snapshot.len == 0) blk: {
         const kernel_bytes = try std.Io.Dir.cwd().readFileAlloc(
@@ -286,7 +293,11 @@ fn run() !void {
             .stat = config.stat,
         }, io, allocator);
     } else blk: {
-        const res = try Vm.from_snapshot(snap.?, allocator, io);
+        const res = try Vm.from_snapshot(snap.?, .{
+            .block_device = if (b) |block| .{ .path = block.path, .async = block.async } else .{},
+            .network = if (net) |n| .{ .mac = n.mac, .iface = n.iface } else null,
+            .pci = config.enable_pci,
+        }, allocator, io);
 
         log.info("Snapshot restored\n", .{});
         break :blk res;

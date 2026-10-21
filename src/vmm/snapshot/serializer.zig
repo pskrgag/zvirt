@@ -83,6 +83,21 @@ pub fn serialize(T: type, val: T, writer: *Writer) !void {
                 },
             }
         },
+        .@"union" => |info| {
+            const tag = std.meta.activeTag(val);
+
+            // 1. Serialize tag
+            try serialize(info.tag_type.?, tag, writer);
+
+            switch (val) {
+                inline else => |payload| {
+                    try serialize(@TypeOf(payload), payload, writer);
+                },
+            }
+        },
+        .@"enum" => |info| {
+            try serialize(info.tag_type, @intFromEnum(val), writer);
+        },
         else => {
             @compileLog("{}\n", .{@typeName(T)});
         },
@@ -155,6 +170,24 @@ pub fn deserialize(T: type, reader: *Reader, alloc: std.mem.Allocator) !T {
                 },
             }
         },
+        .@"enum" => |info| {
+            res = std.enums.fromInt(
+                T,
+                try deserialize(info.tag_type, reader, alloc),
+            ) orelse return error.InvalidEnum;
+        },
+        .@"union" => |info| {
+            // 1. Deserialize tag
+            const tag = try deserialize(info.tag_type.?, reader, alloc);
+
+            res = switch (tag) {
+                inline else => |t| @unionInit(
+                    T,
+                    @tagName(t),
+                    try deserialize(@FieldType(T, @tagName(t)), reader, alloc),
+                ),
+            };
+        },
         else => @panic("Unsupported type"),
     }
 
@@ -163,6 +196,11 @@ pub fn deserialize(T: type, reader: *Reader, alloc: std.mem.Allocator) !T {
 
 const TestSimple = struct {
     a: u32,
+    b: f32,
+};
+
+const Union = union(enum) {
+    a: i32,
     b: f32,
 };
 
@@ -223,5 +261,13 @@ test "serializer" {
         defer new.deinit(allocator);
 
         try std.testing.expectEqualSlices(TestSimple, expected.list.items, new.list.items);
+    }
+
+    {
+        const expected = Union{ .a = 10 };
+        try serialize(Union, expected, &writer);
+
+        const new = try deserialize(Union, &reader, allocator);
+        try std.testing.expectEqualDeep(expected, new);
     }
 }

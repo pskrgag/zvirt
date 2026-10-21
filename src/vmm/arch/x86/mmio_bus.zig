@@ -7,17 +7,28 @@ const IoResult = @import("kvm").IoResult;
 const VirtioMmioDevice = @import("../../device/root.zig").VirtioMmioDevice;
 const log = std.log.scoped(.mmio_bus);
 const Vm = @import("../../root.zig").Vm;
+const DeviceConfig = @import("../../root.zig").DeviceConfig;
+const VirtioDeviceInit = @import("../../device/virtio/root.zig").VirtioDeviceInit;
 const MmioDevice = @import("../../device/root.zig").MmioDevice;
+const SerializableList = @import("../../snapshot/vector.zig").SerializableList;
 
 pub const MAX_DEVICES = 10;
 
 const Self = @This();
 const DeviceTreap = std.Treap(Range, Range.compare);
 
-buffer: [MAX_DEVICES]VirtioMmioDevice,
+buffer: [MAX_DEVICES]VirtioMmioDevice = undefined,
 virtio_devs: std.ArrayList(VirtioMmioDevice),
 ranges: DeviceTreap,
 alloc: std.mem.Allocator,
+
+pub const State = struct {
+    virtio: SerializableList(VirtioMmioDevice.State) = .{},
+
+    pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
+        self.virtio.deinit(alloc);
+    }
+};
 
 const Range = struct {
     start: u64,
@@ -54,6 +65,16 @@ pub fn handle_event(
     io: std.Io,
 ) !void {
     try self.virtio_devs.items[id].handle_event(ctx, io);
+}
+
+pub fn snapshot(self: *Self, alloc: std.mem.Allocator) !State {
+    var state = State{ .virtio = SerializableList(VirtioMmioDevice.State){} };
+
+    for (self.virtio_devs.items) |dev| {
+        try state.virtio.list.append(alloc, try dev.snapshot());
+    }
+
+    return state;
 }
 
 pub fn register_range(self: *Self, start: u64, size: usize, name: []const u8, mmio_range: MmioDevice) !void {
@@ -165,6 +186,42 @@ pub fn new(alloc: std.mem.Allocator) !*Self {
     self.alloc = alloc;
     self.ranges = .{};
     return self;
+}
+
+pub fn from_snapshot(state: *const State, alloc: std.mem.Allocator) !*Self {
+    _ = state;
+
+    return Self.new(alloc);
+}
+
+pub fn restore_devices(
+    self: *Self,
+    snap: *const State,
+    config: *const DeviceConfig,
+    vm: *Vm,
+    alloc: std.mem.Allocator,
+    io: std.Io,
+) !void {
+    for (snap.virtio.list.items) |*state| {
+        const init: VirtioDeviceInit = switch (state.*) {
+            .block => blk: {
+                if (config.block_device.path.len == 0) {
+                    return error.MissingBlockDevicePath;
+                }
+
+                break :blk .{ .BlockDevice = .{
+                    .path = config.block_device.path,
+                    .async = undefined,
+                } };
+            },
+            .net => @panic("todo"),
+        };
+
+        var dev = try VirtioMmioDevice.from_snapshot(state, init, vm, alloc, io);
+        errdefer dev.deinit(alloc, io);
+
+        try self.register_device(vm, dev);
+    }
 }
 
 pub fn register_device(self: *Self, vm: *Vm, dev: VirtioMmioDevice) !void {

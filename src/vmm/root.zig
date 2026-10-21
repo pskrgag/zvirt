@@ -149,11 +149,12 @@ pub const Vm = struct {
         }
 
         var self = try Self.empty(
-            archvm,
             config.worker_threads,
             allocator,
             io,
         );
+
+        self.archvm = archvm;
         errdefer self.deinit(allocator, io);
         archvm_cleanup = null;
 
@@ -201,25 +202,23 @@ pub const Vm = struct {
 
     pub fn from_snapshot(
         snap: Snapshot(VmSnapshotState),
+        device_config: DeviceConfig,
         allocator: std.mem.Allocator,
         io: std.Io,
     ) !*Self {
-        var archvm = try arch.ArchVm.from_snapshot(&snap.data.arch_state, allocator, io);
-        var archvm_cleanup: ?*arch.ArchVm = &archvm;
-
-        errdefer {
-            if (archvm_cleanup) |a|
-                a.deinit(allocator, io);
-        }
+        var archvm = try arch.ArchVm.from_snapshot(
+            &snap.data.arch_state,
+            allocator,
+            io,
+        );
+        errdefer archvm.deinit(allocator, io);
 
         var self = try Self.empty(
-            archvm,
             1,
             allocator,
             io,
         );
-        archvm_cleanup = null;
-        errdefer self.deinit(allocator, io);
+        self.archvm = archvm;
 
         for (snap.data.snapshoted_memory()) |reg| {
             const slice = self.archvm.memory.as_slice(
@@ -235,11 +234,18 @@ pub const Vm = struct {
             try self.vcpus[num].?.restore(cpu);
         }
 
+        try self.archvm.device_bus.restore_devices(
+            &snap.data.arch_state.device_bus,
+            &device_config,
+            self,
+            allocator,
+            io,
+        );
+
         return self;
     }
 
     fn empty(
-        archvm: arch.ArchVm,
         worker_threads: usize,
         allocator: std.mem.Allocator,
         io: std.Io,
@@ -260,7 +266,7 @@ pub const Vm = struct {
                 io,
             ),
             .old_sigaction = old,
-            .archvm = archvm,
+            .archvm = undefined,
         };
 
         return self;

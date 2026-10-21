@@ -97,6 +97,8 @@ pub const Net = struct {
 
     const Self = @This();
 
+    pub const State = struct {};
+
     pub fn features() u32 {
         return (1 << c.VIRTIO_NET_F_MAC) |
             (1 << c.VIRTIO_NET_F_GUEST_CSUM) |
@@ -148,6 +150,11 @@ pub const Net = struct {
             .core = try VirtioCore.new(Self.features(), Self.max_queues_ex(queue_pairs), alloc),
             .queue_pairs = queue_pairs,
         };
+    }
+
+    pub fn snapshot(self: *Self) !State {
+        _ = self;
+        @panic("todo");
     }
 
     fn has_control_queue(self: *const Self) bool {

@@ -955,6 +955,119 @@ test "SMP works" {
     thread.join();
 }
 
+test "Snapshot virtio block buffered writes" {
+    _ = try kvm_system.get();
+
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+
+    try test_utils.mmap.init(allocator);
+    defer test_utils.mmap.deinit() catch @panic("mmap leaked");
+
+    const fds = try test_utils.FdLeakDetector.snapshot(io);
+    defer fds.check_leak(io) catch @panic("fd leaked");
+
+    const binary_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "test_bins/bzImage",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(binary_bytes);
+    const initrd_bytes = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        "zig-out/initrds/test_snapshot_block.img",
+        allocator,
+        .unlimited,
+    );
+    defer allocator.free(initrd_bytes);
+
+    const first_pattern = 0xa5;
+    const second_pattern = 0x5a;
+    const first_size = 256 << 10;
+    const second_size = 64 << 10;
+
+    var disk = try test_utils.DiskImage.create(first_size + second_size);
+    defer disk.deinit();
+
+    const disk_path = try disk.path(allocator);
+    defer allocator.free(disk_path);
+
+    const device_config: @import("root.zig").DeviceConfig = .{
+        .block_device = .{ .path = disk_path, .async = false },
+    };
+
+    var snap = snapshot: {
+        var boot_console = try VmConsoles.new(false, io);
+        defer boot_console.deinit();
+
+        var guest_console = try VmConsoles.new(true, io);
+        defer guest_console.deinit();
+
+        errdefer {
+            dump_whole_file(&boot_console.uart_output) catch {};
+            dump_whole_file(&guest_console.uart_output) catch {};
+        }
+
+        const vm = try Vm.new(.{
+            .ram_size = 512 << 20,
+            .binary = binary_bytes,
+            .initramfs = initrd_bytes,
+            .device_config = device_config,
+            .worker_threads = 1,
+        }, io, allocator);
+        defer vm.deinit(allocator, io);
+
+        try boot_console.attach(vm, 0, null, allocator);
+        try guest_console.attach(vm, 1, null, allocator);
+
+        const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ vm, allocator, io });
+
+        defer {
+            vm.stop_sync(io) catch {};
+            thread.join();
+        }
+
+        try guest_console.wait_for("SNAPSHOT-READY\n");
+        break :snapshot try vm.snapshot(io, allocator);
+    };
+    defer snap.data.deinit(allocator);
+
+    var boot_console = try VmConsoles.new(false, io);
+    defer boot_console.deinit();
+
+    var guest_console = try VmConsoles.new(true, io);
+    defer guest_console.deinit();
+
+    errdefer {
+        dump_whole_file(&boot_console.uart_output) catch {};
+        dump_whole_file(&guest_console.uart_output) catch {};
+    }
+
+    const restored = try Vm.from_snapshot(snap, device_config, allocator, io);
+    defer restored.deinit(allocator, io);
+
+    try boot_console.attach(restored, 0, snap, allocator);
+    try guest_console.attach(restored, 1, snap, allocator);
+
+    const thread = try std.Thread.spawn(.{}, vm_run_thread, .{ restored, allocator, io });
+    defer {
+        restored.stop_sync(io) catch {};
+        thread.join();
+    }
+
+    try guest_console.write("continue\n");
+    try guest_console.wait_for("SNAPSHOT-PASS\n");
+
+    var actual: [first_size + second_size]u8 = undefined;
+    const len = try disk.file.readPositionalAll(io, &actual, 0);
+
+    try std.testing.expectEqual(actual.len, len);
+    try std.testing.expect(std.mem.allEqual(u8, actual[0..first_size], first_pattern));
+    try std.testing.expect(std.mem.allEqual(u8, actual[first_size..], second_pattern));
+    try std.testing.expectEqual(@as(u64, first_size + second_size), (try disk.file.stat(io)).size);
+}
+
 test "Snapshot running linux (UP)" {
     _ = try kvm_system.get();
 
@@ -1011,7 +1124,7 @@ test "Snapshot running linux (UP)" {
     defer consoles.deinit();
     errdefer dump_whole_file(&consoles.uart_output) catch {};
 
-    var vm = try Vm.from_snapshot(snap, allocator, io);
+    var vm = try Vm.from_snapshot(snap, .{}, allocator, io);
     defer vm.deinit(allocator, io);
 
     try consoles.attach(vm, 0, snap, allocator);

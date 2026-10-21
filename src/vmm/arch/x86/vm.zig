@@ -157,11 +157,11 @@ pub const ArchVm = struct {
         const system = try kvm_system.get();
 
         // Create empty KVM VM
-        var vm = try system.create_vm();
-        errdefer vm.deinit();
+        var kvm_vm = try system.create_vm();
+        errdefer kvm_vm.deinit();
 
-        try vm.restore_irqchip(state.irqchip);
-        try vm.restore_pit(state.pit);
+        try kvm_vm.restore_irqchip(state.irqchip);
+        try kvm_vm.restore_pit(state.pit);
 
         var mem = try memory.GuestMemory.new(alloc);
         errdefer mem.deinit(alloc);
@@ -171,7 +171,7 @@ pub const ArchVm = struct {
 
         // Map regions into kvm
         for (mem.get_regions()) |reg| {
-            try vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
+            try kvm_vm.set_user_memory_region(reg.gpa, reg.slot, reg.raw);
         }
 
         return .{
@@ -180,7 +180,7 @@ pub const ArchVm = struct {
             .irqs = state.irq_alloc,
             .mmio_alloc = state.mmio_alloc,
             .memory = mem,
-            .vm = vm,
+            .vm = kvm_vm,
         };
     }
 

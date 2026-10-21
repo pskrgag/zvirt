@@ -94,7 +94,7 @@ fn test_snapshot_restore(serialized: bool) !void {
     defer output.deinit();
 
     // The original VM is gone; the snapshot owns the RAM needed for restore.
-    const restored = try Vm.from_snapshot(snap, allocator, io);
+    const restored = try Vm.from_snapshot(snap, .{}, allocator, io);
     defer restored.deinit(allocator, io);
 
     // TODO: TSC keeps advancing even if vCPU is not running. Need to find a better way of checking
@@ -144,7 +144,7 @@ test "Snapshot owns memory" {
         .ram_size = 0,
         .mmio_alloc = .{ .gpa = 0 },
         .irq_alloc = .{},
-        .device_bus = .{ .io = .{} },
+        .device_bus = .{},
         .pit = .{},
         .irqchip = std.mem.zeroes(@import("kvm").Vm.IrqState),
     });

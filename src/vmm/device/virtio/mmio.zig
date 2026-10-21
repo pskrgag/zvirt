@@ -59,6 +59,16 @@ pub fn VirtioMmio(comptime Device: type) type {
 
         const Self = @This();
 
+        pub const State = struct {
+            base: u64,
+            irq: u32,
+            device_sel: bool = false,
+            driver_sel: bool = false,
+            queue_sel: u32 = 0,
+            irq_state: u32 = 0,
+            device_state: Device.State,
+        };
+
         fn queue_num_max(self: *const Self) u32 {
             return if (self.queue_sel < self.device.core.max_queues())
                 MAX_QUEUE_ELEMENTS
@@ -81,6 +91,37 @@ pub fn VirtioMmio(comptime Device: type) type {
                 .irq = irq,
                 .device = device,
                 .vm = vm,
+            };
+        }
+
+        pub fn snapshot(self: *Self) !State {
+            return .{
+                .base = self.base,
+                .irq = self.irq,
+                .device_sel = self.device_sel,
+                .driver_sel = self.driver_sel,
+                .queue_sel = self.queue_sel,
+                .irq_state = self.irq_state,
+                .device_state = try self.device.snapshot(),
+            };
+        }
+
+        pub fn from_snapshot(state: *const State, device: Device, vm: *Vm) !Self {
+            var irqfd = try EventFd.new(0);
+            errdefer irqfd.deinit();
+
+            try vm.register_irq(&irqfd, state.irq);
+
+            return .{
+                .base = state.base,
+                .irq = state.irq,
+                .device = device,
+                .device_sel = state.device_sel,
+                .driver_sel = state.driver_sel,
+                .queue_sel = state.queue_sel,
+                .vm = vm,
+                .irq_state = state.irq_state,
+                .irqfd = irqfd,
             };
         }
 
@@ -256,6 +297,52 @@ pub const VirtioMmioDevice = union(enum) {
         return switch (self.*) {
             .block => "virtio block",
             .net => "virtio net",
+        };
+    }
+
+    pub const State = union(enum) {
+        block: VirtioMmio(Block).State,
+        net: VirtioMmio(Net).State,
+    };
+
+    pub fn snapshot(self: *const Self) !State {
+        return switch (self.*) {
+            .block => |device| .{ .block = try device.snapshot() },
+            .net => |device| .{ .net = try device.snapshot() },
+        };
+    }
+
+    // TODO: need to make a type coherence between state and init
+    pub fn from_snapshot(
+        state: *const State,
+        init: VirtioDeviceInit,
+        vm: *Vm,
+        alloc: std.mem.Allocator,
+        io: std.Io,
+    ) !Self {
+        return switch (state.*) {
+            .block => |*block_state| blk: {
+                const config = switch (init) {
+                    .BlockDevice => |config| config,
+                    else => @panic("This must not happen"),
+                };
+
+                var device = try Block.from_snapshot(
+                    &block_state.device_state,
+                    config.path,
+                    vm.archvm.memory,
+                    alloc,
+                    io,
+                );
+                errdefer device.deinit(alloc, io);
+
+                const dev = try alloc.create(VirtioMmio(Block));
+                errdefer alloc.destroy(dev);
+
+                dev.* = try VirtioMmio(Block).from_snapshot(block_state, device, vm);
+                break :blk .{ .block = dev };
+            },
+            .net => @panic("todo")
         };
     }
 

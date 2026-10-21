@@ -22,15 +22,20 @@ mmio_bus: *mmio_bus_struct,
 const Self = @This();
 
 pub const State = struct {
-    io: io_bus_struct.State,
+    io: io_bus_struct.State = .{},
+    mmio: mmio_bus_struct.State = .{},
 
     pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
         self.io.deinit(alloc);
+        self.mmio.deinit(alloc);
     }
 };
 
 pub fn snapshot(self: *Self, alloc: std.mem.Allocator, io: std.Io) !State {
-    return .{ .io = try self.io_bus.snapshot(alloc, io) };
+    return .{
+        .io = try self.io_bus.snapshot(alloc, io),
+        .mmio = try self.mmio_bus.snapshot(alloc),
+    };
 }
 
 pub fn attach_console(
@@ -81,14 +86,29 @@ pub fn handle_mmio(self: *Self, mmio_request: anytype, io: std.Io) !?IoResult {
     return self.mmio_bus.handle_mmio(mmio_request, io);
 }
 
-pub fn from_snapshot(state: *const State, alloc: std.mem.Allocator, io: std.Io) !Self {
-    var mmio_bus = try mmio_bus_struct.new(alloc);
+pub fn from_snapshot(
+    state: *const State,
+    alloc: std.mem.Allocator,
+    io: std.Io,
+) !Self {
+    var mmio_bus = try mmio_bus_struct.from_snapshot(&state.mmio, alloc);
     errdefer mmio_bus.deinit(alloc, io);
 
     return .{
         .mmio_bus = mmio_bus,
         .io_bus = try io_bus_struct.from_snapshot(&state.io, alloc, io),
     };
+}
+
+pub fn restore_devices(
+    self: *Self,
+    state: *const State,
+    config: *const DeviceConfig,
+    vm: *Vm,
+    alloc: std.mem.Allocator,
+    io: std.Io,
+) !void {
+    try self.mmio_bus.restore_devices(&state.mmio, config, vm, alloc, io);
 }
 
 pub fn new(pci_range: ?layout.MemorySlot, alloc: std.mem.Allocator, io: std.Io) !Self {

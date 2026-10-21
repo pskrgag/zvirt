@@ -10,6 +10,7 @@ const VirtioCore = @import("root.zig").VirtioCore;
 const NotifyResult = @import("root.zig").NotifyResult;
 const EventSources = @import("event_source.zig").EventSources;
 const Vm = @import("../../root.zig").Vm;
+const GuestMemory = @import("../../memory.zig").GuestMemory;
 
 pub const c = @cImport({
     @cInclude("linux/virtio_blk.h");
@@ -65,6 +66,12 @@ pub const Block = struct {
 
     const Self = @This();
 
+    pub const State = struct {
+        config: c.virtio_blk_config,
+        core: VirtioCore.State,
+        async: bool,
+    };
+
     pub fn new(
         path: []const u8,
         num_queues: usize,
@@ -94,6 +101,44 @@ pub const Block = struct {
             .file = file,
             .engine = engine,
             .core = try VirtioCore.new(Self.features(), queues, alloc),
+        };
+    }
+
+    pub fn snapshot(self: *Self) !State {
+        if (self.engine.is_async())
+            @panic("Async is not supported");
+
+        // At that point VM is stopped and all events are processed.
+        return .{
+            .config = self.config,
+            .core = self.core.snapshot(),
+            .async = self.engine.is_async(),
+        };
+    }
+
+    pub fn from_snapshot(
+        snap: *const State,
+        path: []const u8,
+        memory: *GuestMemory,
+        alloc: std.mem.Allocator,
+        io: std.Io,
+    ) !Self {
+        var engine = if (!snap.async)
+            try FileEngine.new_sync()
+        else
+            try FileEngine.new_sync();
+        errdefer engine.deinit();
+
+        std.debug.assert(!snap.async or snap.config.num_queues == 1);
+
+        var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
+        errdefer file.close(io);
+
+        return .{
+            .config = snap.config,
+            .file = file,
+            .engine = engine,
+            .core = try VirtioCore.from_snapshot(&snap.core, memory, alloc),
         };
     }
 

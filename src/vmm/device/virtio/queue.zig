@@ -157,6 +157,56 @@ pub const VirtQueue = struct {
         };
     }
 
+    pub const State = struct {
+        is_ready: u32 = 0,
+
+        last_avail_idx: u16 = 0,
+        next_used_idx: u16 = 0,
+        supression: bool,
+    };
+
+    pub fn snapshot(self: *Self) State {
+        return .{
+            .is_ready = self.is_ready,
+            .last_avail_idx = self.last_avail_idx,
+            .next_used_idx = self.next_used_idx,
+            .supression = self.supression,
+        };
+    }
+
+    pub fn from_snapshot(
+        snap: *const State,
+        mem: *GuestMemory,
+        desc_ring: u64,
+        available_ring: u64,
+        _used_ring: u64,
+        elements: usize,
+    ) !Self {
+        return .{
+            .avail_ring_ptr = Self.avail_ring(
+                elements,
+                mem,
+                available_ring,
+                snap.supression,
+            ) orelse return error.InvalidAddr,
+            .descr_ring_ptr = Self.descr_ring(
+                elements,
+                mem,
+                desc_ring,
+            ) orelse return error.InvalidAddr,
+            .used_ring_ptr = Self.used_ring(
+                elements,
+                mem,
+                _used_ring,
+                snap.supression,
+            ) orelse return error.InvalidAddr,
+            .is_ready = snap.is_ready,
+            .last_avail_idx = snap.last_avail_idx,
+            .next_used_idx = snap.next_used_idx,
+            .supression = snap.supression,
+        };
+    }
+
     fn used_ring(elements: usize, mem: *GuestMemory, address: u64, suppression: bool) ?*UsedRingHeader {
         const used_ring_size = elements * @sizeOf(UsedElement) +
             @sizeOf(UsedRingHeader) +

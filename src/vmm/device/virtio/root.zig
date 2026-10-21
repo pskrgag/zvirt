@@ -68,6 +68,51 @@ const VirtQueueState = struct {
 
     alloc: std.heap.ArenaAllocator,
     notifyfd: EventFd,
+
+    const Self = @This();
+
+    pub const State = struct {
+        desc_ring: u64,
+        available_ring: u64,
+        used_ring: u64,
+        elements: u32,
+        queue: ?VirtQueue.State,
+    };
+
+    pub fn snapshot(self: *Self) State {
+        return .{
+            .desc_ring = self.desc_ring,
+            .available_ring = self.available_ring,
+            .used_ring = self.used_ring,
+            .elements = self.elements,
+            .queue = if (self.queue) |*q| q.snapshot() else null,
+        };
+    }
+
+    pub fn from_snapshot(snap: *const State, memory: *GuestMemory, allocator: std.mem.Allocator,) !Self {
+        var notifyfd = try EventFd.new(0);
+        errdefer notifyfd.deinit();
+
+        return .{
+            .alloc = std.heap.ArenaAllocator.init(allocator),
+            .notifyfd = notifyfd,
+            .desc_ring = snap.desc_ring,
+            .available_ring = snap.available_ring,
+            .used_ring = snap.used_ring,
+            .elements = snap.elements,
+            .queue = if (snap.queue) |*s|
+                try VirtQueue.from_snapshot(
+                    s,
+                    memory,
+                    snap.desc_ring,
+                    snap.available_ring,
+                    snap.used_ring,
+                    snap.elements,
+                )
+            else
+                null,
+        };
+    }
 };
 
 pub const NotifyResult = struct {
@@ -119,6 +164,70 @@ pub const VirtioCore = struct {
             .device_features = features | (1 << c.VIRTIO_F_VERSION_1) | (1 << c.VIRTIO_RING_F_EVENT_IDX),
             .virt_queues = state,
             .queues = queues,
+        };
+    }
+
+    pub const State = struct {
+        status: Status,
+        virt_queues: [MAX_QUEUES_SUPPORTED]VirtQueueState.State,
+        device_features: u64,
+        driver_features: u64,
+        queues: usize,
+    };
+
+    pub fn snapshot(self: *Self) State {
+        var virt_queues: [MAX_QUEUES_SUPPORTED]VirtQueueState.State = undefined;
+
+        for (0..MAX_QUEUES_SUPPORTED) |i| {
+            virt_queues[i] = self.virt_queues[i].snapshot();
+        }
+
+        return .{
+            .status = self.status,
+            .device_features = self.device_features,
+            .driver_features = self.driver_features,
+            .queues = self.queues,
+            .virt_queues = virt_queues,
+        };
+    }
+
+    pub fn from_snapshot(
+        snap: *const State,
+        memory: *GuestMemory,
+        allocator: std.mem.Allocator,
+    ) !Self {
+        if (snap.queues > MAX_QUEUES_SUPPORTED) {
+            return error.TooManyQueues;
+        }
+
+        var state: [MAX_QUEUES_SUPPORTED]VirtQueueState = @splat(.{
+            .alloc = std.heap.ArenaAllocator.init(allocator),
+            .notifyfd = undefined,
+        });
+
+        var restored: usize = 0;
+
+        errdefer {
+            for (state[0..restored]) |*s| {
+                s.notifyfd.deinit();
+                s.alloc.deinit();
+            }
+        }
+
+        while (restored < snap.queues) : (restored += 1) {
+            state[restored] = try VirtQueueState.from_snapshot(
+                &snap.virt_queues[restored],
+                memory,
+                allocator,
+            );
+        }
+
+        return .{
+            .status = snap.status,
+            .virt_queues = state,
+            .device_features = snap.device_features,
+            .driver_features = snap.driver_features,
+            .queues = snap.queues,
         };
     }
 

@@ -141,6 +141,7 @@ pub const IoWorker = struct {
         self.start_event.set(io);
 
         while (true) {
+            // Graceful shutdown makes it explicit that all in-flight events are completed.
             self.shutdown_event.notify() catch |err| {
                 if (err == error.Interrupted) {
                     continue;
