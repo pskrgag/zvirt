@@ -211,7 +211,12 @@ pub const Vm = struct {
             allocator,
             io,
         );
-        errdefer archvm.deinit(allocator, io);
+        var archvm_cleanup: ?*arch.ArchVm = &archvm;
+        errdefer {
+            if (archvm_cleanup) |owned| {
+                owned.deinit(allocator, io);
+            }
+        }
 
         var self = try Self.empty(
             1,
@@ -219,6 +224,8 @@ pub const Vm = struct {
             io,
         );
         self.archvm = archvm;
+        archvm_cleanup = null;
+        errdefer self.deinit(allocator, io);
 
         for (snap.data.snapshoted_memory()) |reg| {
             const slice = self.archvm.memory.as_slice(

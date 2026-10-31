@@ -36,7 +36,7 @@ const TxBuffers = struct {
     const Self = @This();
 
     fn new(alloc: std.mem.Allocator) !Self {
-        const buffer = try alloc.alloc(TxChain, 1000);
+        const buffer = try alloc.alloc(TxChain, 1024);
 
         return .{ .buffer = buffer, .queue = std.Deque(TxChain).initBuffer(buffer) };
     }
@@ -152,7 +152,7 @@ pub const Net = struct {
         };
     }
 
-    pub fn snapshot(self: *Self) !State {
+    pub fn snapshot(self: *const Self) !State {
         _ = self;
         @panic("todo");
     }

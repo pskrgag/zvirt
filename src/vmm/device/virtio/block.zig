@@ -104,7 +104,7 @@ pub const Block = struct {
         };
     }
 
-    pub fn snapshot(self: *Self) !State {
+    pub fn snapshot(self: *const Self) !State {
         if (self.engine.is_async())
             @panic("Async is not supported");
 

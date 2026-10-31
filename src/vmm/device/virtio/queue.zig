@@ -165,7 +165,7 @@ pub const VirtQueue = struct {
         supression: bool,
     };
 
-    pub fn snapshot(self: *Self) State {
+    pub fn snapshot(self: *const Self) State {
         return .{
             .is_ready = self.is_ready,
             .last_avail_idx = self.last_avail_idx,

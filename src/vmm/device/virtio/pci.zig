@@ -4,6 +4,7 @@ const std = @import("std");
 const virtio = @import("root.zig");
 const VirtioCore = virtio.VirtioCore;
 const VirtioDeviceInit = virtio.VirtioDeviceInit;
+const RestoreParams = virtio.RestoreParams;
 const pci_config = @import("../pci/config.zig");
 const PciConfigSpace = pci_config.PciConfigSpace;
 const Bar = @import("../pci/bar.zig").Bar;
@@ -52,6 +53,76 @@ fn VirtioPci(comptime Device: type) type {
         bar: u8,
 
         const Self = @This();
+
+        pub const State = struct {
+            device_sel: u32,
+            driver_sel: u32,
+            change_vector: u32,
+            queue_select: u16,
+            config_vector: u32,
+            queue_vectors: [virtio.MAX_QUEUES_SUPPORTED]u32,
+            bar: u8,
+            device_state: Device.State,
+            pci: PciDeviceCore.State,
+        };
+
+        pub fn snapshot(self: *const Self) !State {
+            var vectors: [virtio.MAX_QUEUES_SUPPORTED]u32 = undefined;
+
+            for (&vectors, &self.queue_vectors) |*saved, *vector| {
+                saved.* = vector.load(.monotonic);
+            }
+
+            return .{
+                .device_state = try self.device.snapshot(),
+                .device_sel = self.device_sel,
+                .driver_sel = self.driver_sel,
+                .change_vector = self.change_vector,
+                .queue_select = self.queue_select,
+                .config_vector = self.config_vector,
+                .queue_vectors = vectors,
+                .bar = self.bar,
+                .pci = self.pci.snapshot(),
+            };
+        }
+
+        pub fn from_snapshot(
+            state: *const State,
+            device: Device,
+            bus: *PciBus,
+            vm: *Vm,
+            alloc: std.mem.Allocator,
+        ) !*Self {
+            const self = try alloc.create(Self);
+            errdefer alloc.destroy(self);
+
+            const pci = try PciDeviceCore.from_snapshot(&state.pci, bus, vm, alloc);
+            errdefer pci.deinit(alloc);
+
+            try pci.restore_bar(&state.pci, state.bar, .{
+                .context = self,
+                .read_fn = mmio_read,
+                .write_fn = mmio_write,
+            });
+
+            self.* = .{
+                .device = device,
+                .pci = pci,
+                .allocator = alloc,
+                .device_sel = state.device_sel,
+                .driver_sel = state.driver_sel,
+                .change_vector = state.change_vector,
+                .queue_select = state.queue_select,
+                .config_vector = state.config_vector,
+                .bar = state.bar,
+            };
+
+            for (&self.queue_vectors, &state.queue_vectors) |*vector, saved| {
+                vector.* = .init(saved);
+            }
+
+            return self;
+        }
 
         pub fn new(device: Device, bus: *PciBus, vm: *Vm, alloc: std.mem.Allocator) !*Self {
             const self = try alloc.create(Self);
@@ -324,6 +395,11 @@ pub const VirtioPciDevice = union(enum) {
 
     const Self = @This();
 
+    pub const State = union(enum) {
+        block: VirtioPci(Block).State,
+        net: VirtioPci(Net).State,
+    };
+
     pub fn register_events(self: *Self, vm: *Vm, id: u10) !void {
         switch (self.*) {
             inline else => |device| try device.register_events(vm, id),
@@ -334,6 +410,52 @@ pub const VirtioPciDevice = union(enum) {
         switch (self.*) {
             inline else => |device| try device.handle_event(ctx, io),
         }
+    }
+
+    pub fn snapshot(self: *const Self) !State {
+        return switch (self.*) {
+            .block => |blk| .{ .block = try blk.snapshot() },
+            .net => |net| .{ .net = try net.snapshot() },
+        };
+    }
+
+    pub fn from_snapshot(
+        state: *const State,
+        params: RestoreParams,
+        bus: *PciBus,
+        vm: *Vm,
+        alloc: std.mem.Allocator,
+        io: std.Io,
+    ) !Self {
+        return switch (state.*) {
+            .block => |*block_state| blk: {
+                const config = switch (params) {
+                    .block => |config| config,
+                    else => return error.SnapshotDeviceMismatch,
+                };
+                if (block_state.device_state.async) {
+                    return error.UnsupportedAsyncSnapshot;
+                }
+
+                var device = try Block.from_snapshot(
+                    &block_state.device_state,
+                    config.path,
+                    vm.archvm.memory,
+                    alloc,
+                    io,
+                );
+                errdefer device.deinit(alloc, io);
+
+                break :blk .{ .block = try VirtioPci(Block).from_snapshot(
+                    block_state,
+                    device,
+                    bus,
+                    vm,
+                    alloc,
+                ) };
+            },
+            .net => return error.UnsupportedSnapshotDevice,
+        };
     }
 
     pub fn new(

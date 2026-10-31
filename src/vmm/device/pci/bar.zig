@@ -10,6 +10,19 @@ pub const Bar = struct {
 
     const Self = @This();
 
+    pub const State = struct {
+        base: u64,
+        size: usize,
+    };
+
+    pub fn snapshot(self: *const Self) State {
+        return .{ .base = self.base, .size = self.size };
+    }
+
+    pub fn from_snapshot(state: *const State, handler: MmioDevice) Self {
+        return .{ .base = state.base, .size = state.size, .handler = handler };
+    }
+
     pub fn value(self: *const Self) u32 {
         std.debug.assert(self.base <= std.math.maxInt(u32));
         std.debug.assert(self.base & 0xF == 0);
@@ -30,6 +43,20 @@ pub const BarAllocator = struct {
 
     pub fn new(base: u64, size: usize) Self {
         return .{ .base = base, .size = size, .offset = 0 };
+    }
+
+    pub const State = struct {
+        base: u64,
+        size: usize,
+        offset: usize,
+    };
+
+    pub fn from_snapshot(state: *const State) Self {
+        return .{ .base = state.base, .size = state.size, .offset = state.offset };
+    }
+
+    pub fn snapshot(self: *const Self) State {
+        return .{ .offset = self.offset, .size = self.size, .base = self.base };
     }
 
     pub fn allocate(self: *Self, size: usize, handler: MmioDevice) !Bar {

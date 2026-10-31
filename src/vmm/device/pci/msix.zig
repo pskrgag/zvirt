@@ -4,6 +4,7 @@ const std = @import("std");
 const PciDeviceCore = @import("root.zig").PciDeviceCore;
 const PciBus = @import("root.zig").PciBus;
 const Vm = @import("../../root.zig").Vm;
+const MmioDevice = @import("../root.zig").MmioDevice;
 
 const log = std.log.scoped(.pci_msix);
 
@@ -45,7 +46,46 @@ pub const Msix = struct {
     mutex: std.Io.Mutex = .init,
     pba: [pba_size(MAX_IRQS) catch @compileError("Fix constant")]u8 = @splat(0),
     pci: *PciDeviceCore,
+    bar: u8,
+
     const Self = @This();
+
+    pub const State = struct {
+        max_irqs: usize,
+        table: [MAX_IRQS]TableEntry,
+        cap: usize,
+        pba: [pba_size(MAX_IRQS) catch @compileError("Fix constant")]u8,
+        bar: u8,
+    };
+
+    pub fn snapshot(self: *const Self) State {
+        return .{
+            .max_irqs = self.max_irqs,
+            .table = self.table,
+            .cap = self.cap,
+            .pba = self.pba,
+            .bar = self.bar,
+        };
+    }
+
+    pub fn from_snapshot(state: *const State, pci: *PciDeviceCore, alloc: std.mem.Allocator) !*Self {
+        const self = try alloc.create(Self);
+
+        self.* = .{
+            .max_irqs = state.max_irqs,
+            .table = state.table,
+            .cap = state.cap,
+            .pba = state.pba,
+            .pci = pci,
+            .bar = state.bar,
+        };
+
+        return self;
+    }
+
+    pub fn mmio_device(self: *Self) MmioDevice {
+        return .{ .context = self, .read_fn = mmio_read, .write_fn = mmio_write };
+    }
 
     pub fn new(pci: *PciDeviceCore, max_irqs: usize, alloc: std.mem.Allocator) !*Self {
         const self = try alloc.create(Self);
@@ -68,7 +108,7 @@ pub const Msix = struct {
             .msg_control = .{
                 .table_count = @as(TableCountType, @truncate(max_irqs)) - 1,
             },
-            .table = bar | 0,
+            .table = bar,
             .pending_bit_array = bar | @as(u32, @truncate(table_size)),
         };
 
@@ -76,6 +116,7 @@ pub const Msix = struct {
             .max_irqs = max_irqs,
             .cap = try pci.config.add_capability(std.mem.asBytes(&cap)),
             .pci = pci,
+            .bar = bar,
         };
 
         pci.config.set_write_write_mask(u16, 3 << 14, self.cap + 2);

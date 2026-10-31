@@ -955,7 +955,7 @@ test "SMP works" {
     thread.join();
 }
 
-test "Snapshot virtio block buffered writes" {
+fn test_block_snapshot(pci: bool) !void {
     _ = try kvm_system.get();
 
     const io = std.testing.io;
@@ -995,6 +995,7 @@ test "Snapshot virtio block buffered writes" {
 
     const device_config: @import("root.zig").DeviceConfig = .{
         .block_device = .{ .path = disk_path, .async = false },
+        .pci = pci,
     };
 
     var snap = snapshot: {
@@ -1066,6 +1067,14 @@ test "Snapshot virtio block buffered writes" {
     try std.testing.expect(std.mem.allEqual(u8, actual[0..first_size], first_pattern));
     try std.testing.expect(std.mem.allEqual(u8, actual[first_size..], second_pattern));
     try std.testing.expectEqual(@as(u64, first_size + second_size), (try disk.file.stat(io)).size);
+}
+
+test "Snapshot virtio block buffered writes (mmio)" {
+    try test_block_snapshot(false);
+}
+
+test "Snapshot virtio block buffered writes (pci)" {
+    try test_block_snapshot(true);
 }
 
 test "Snapshot running linux (UP)" {

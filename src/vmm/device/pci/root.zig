@@ -3,6 +3,7 @@
 const std = @import("std");
 const log = std.log.scoped(.pci);
 const VirtioPciDevice = @import("../virtio/pci.zig").VirtioPciDevice;
+const RestoreParams = @import("../virtio/root.zig").RestoreParams;
 const arch = @import("../../arch/root.zig");
 const DeviceConfig = @import("../../root.zig").DeviceConfig;
 pub const Bar = @import("bar.zig").Bar;
@@ -13,6 +14,7 @@ const PciClass = @import("config.zig").PciClass;
 const msix = @import("msix.zig");
 const Vm = @import("../../root.zig").Vm;
 const MemorySlot = @import("../../arch/root.zig").layout.MemorySlot;
+const SerializableList = @import("../../snapshot/vector.zig").SerializableList;
 
 pub const PciBridge = @import("bridge.zig").PciBridge;
 const MAX_DEVICES = 32;
@@ -40,6 +42,65 @@ pub const PciDeviceCore = struct {
 
     const Self = @This();
 
+    pub const State = struct {
+        config: PciConfigSpace,
+        bars: [6]?Bar.State,
+        active_bars: u8,
+        msix: ?msix.Msix.State,
+    };
+
+    pub fn snapshot(self: *const Self) State {
+        var bars: [6]?Bar.State = @splat(null);
+
+        for (0..self.active_bars) |i| {
+            bars[i] = self.bars[i].?.snapshot();
+        }
+
+        return .{
+            .config = self.config,
+            .bars = bars,
+            .active_bars = self.active_bars,
+            .msix = if (self.msix) |mx| mx.snapshot() else null,
+        };
+    }
+
+    pub fn from_snapshot(
+        state: *const State,
+        bus: *PciBus,
+        vm: *Vm,
+        alloc: std.mem.Allocator,
+    ) !*Self {
+        if (state.active_bars > state.bars.len) {
+            return error.InvalidSnapshot;
+        }
+
+        const self = try alloc.create(Self);
+        self.* = .{
+            .config = state.config,
+            .active_bars = state.active_bars,
+            .bus = bus,
+            .vm = vm,
+        };
+
+        errdefer self.deinit(alloc);
+
+        if (state.msix) |*saved| {
+            self.msix = try msix.Msix.from_snapshot(saved, self, alloc);
+            try self.restore_bar(state, self.msix.?.bar, self.msix.?.mmio_device());
+        }
+
+        return self;
+    }
+
+    pub fn restore_bar(self: *Self, state: *const State, index: u8, handler: MmioDevice) !void {
+        if (index >= self.active_bars or self.bars[index] != null) {
+            return error.InvalidSnapshot;
+        }
+
+        const bar = state.bars[index] orelse return error.InvalidSnapshot;
+        self.bars[index] = Bar.from_snapshot(&bar, handler);
+    }
+
     pub fn new_device(
         vendor_id: u16,
         device_id: u16,
@@ -66,7 +127,13 @@ pub const PciDeviceCore = struct {
         return self;
     }
 
-    pub fn new_bridge(vendor_id: u16, device_id: u16, class: PciClass, subclass: u8, bus: *PciBus) Self {
+    pub fn new_bridge(
+        vendor_id: u16,
+        device_id: u16,
+        class: PciClass,
+        subclass: u8,
+        bus: *PciBus,
+    ) Self {
         const config = PciConfigSpace.new_type0(
             vendor_id,
             device_id,
@@ -162,10 +229,43 @@ pub const PciDeviceCore = struct {
 };
 
 pub const PciDevice = union(enum) {
-    Brigde: *PciBridge,
+    Brigde: PciBridge,
     Virtio: VirtioPciDevice,
 
     const Self = @This();
+
+    pub const State = union(enum) {
+        Brigde: PciBridge.State,
+        Virtio: VirtioPciDevice.State,
+    };
+
+    pub fn from_snapshot(
+        state: *const State,
+        params: ?RestoreParams,
+        bus: *PciBus,
+        vm: *Vm,
+        alloc: std.mem.Allocator,
+        io: std.Io,
+    ) !Self {
+        return switch (state.*) {
+            .Brigde => |*b| .{ .Brigde = try PciBridge.from_snapshot(b, bus, vm) },
+            .Virtio => |*v| .{ .Virtio = try VirtioPciDevice.from_snapshot(
+                v,
+                params orelse return error.MissingRestoreParams,
+                bus,
+                vm,
+                alloc,
+                io,
+            ) },
+        };
+    }
+
+    pub fn snapshot(self: *const Self) !State {
+        return switch (self.*) {
+            .Brigde => |b| .{ .Brigde = b.snapshot() },
+            .Virtio => |v| .{ .Virtio = try v.snapshot() },
+        };
+    }
 
     pub fn register_events(self: *Self, vm: *Vm, id: u10) !void {
         switch (self.*) {
@@ -183,14 +283,14 @@ pub const PciDevice = union(enum) {
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
         switch (self.*) {
-            .Brigde => |bridge| alloc.destroy(bridge),
+            .Brigde => {},
             .Virtio => |*device| device.deinit(alloc, io),
         }
     }
 
     fn pci_core(self: *Self) *PciDeviceCore {
         return switch (self.*) {
-            .Brigde => |bridge| bridge.pci_core(),
+            .Brigde => |*bridge| bridge.pci_core(),
             .Virtio => |*device| device.pci_core(),
         };
     }
@@ -218,21 +318,53 @@ pub const PciBus = struct {
 
     const Self = @This();
 
+    pub const State = struct {
+        devices: SerializableList(PciDevice.State),
+        allocator: BarAllocator.State,
+
+        pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
+            self.devices.list.deinit(alloc);
+        }
+    };
+
     pub fn new(bridge: PciBridge, pci_range: MemorySlot, alloc: std.mem.Allocator) !*Self {
         const self = try alloc.create(Self);
         errdefer alloc.destroy(self);
 
-        const bridge_ptr = try alloc.create(PciBridge);
-        errdefer alloc.destroy(bridge_ptr);
-        bridge_ptr.* = bridge;
-
         var devs: [MAX_DEVICES]?PciDevice = @splat(null);
         const allocator = BarAllocator.new(pci_range.start, pci_range.length);
 
-        devs[0] = PciDevice{ .Brigde = bridge_ptr };
+        devs[0] = PciDevice{ .Brigde = bridge };
         self.* = .{ .devices = devs, .allocator = allocator };
 
         return self;
+    }
+
+    pub fn from_snapshot(state: *const State, alloc: std.mem.Allocator) !*Self {
+        const self = try alloc.create(Self);
+
+        self.* = .{
+            .devices = @splat(null),
+            .allocator = BarAllocator.from_snapshot(&state.allocator),
+        };
+
+        return self;
+    }
+
+    pub fn snapshot(self: *const Self, alloc: std.mem.Allocator) !State {
+        var devices = SerializableList(PciDevice.State){};
+        errdefer devices.deinit(alloc);
+
+        for (&self.devices) |*d| {
+            if (d.*) |*dev| {
+                try devices.list.append(alloc, try dev.snapshot());
+            }
+        }
+
+        return .{
+            .devices = devices,
+            .allocator = self.allocator.snapshot(),
+        };
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {

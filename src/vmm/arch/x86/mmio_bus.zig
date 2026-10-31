@@ -8,7 +8,7 @@ const VirtioMmioDevice = @import("../../device/root.zig").VirtioMmioDevice;
 const log = std.log.scoped(.mmio_bus);
 const Vm = @import("../../root.zig").Vm;
 const DeviceConfig = @import("../../root.zig").DeviceConfig;
-const VirtioDeviceInit = @import("../../device/virtio/root.zig").VirtioDeviceInit;
+const RestoreParams = @import("../../device/virtio/root.zig").RestoreParams;
 const MmioDevice = @import("../../device/root.zig").MmioDevice;
 const SerializableList = @import("../../snapshot/vector.zig").SerializableList;
 
@@ -203,21 +203,20 @@ pub fn restore_devices(
     io: std.Io,
 ) !void {
     for (snap.virtio.list.items) |*state| {
-        const init: VirtioDeviceInit = switch (state.*) {
+        const params: RestoreParams = switch (state.*) {
             .block => blk: {
                 if (config.block_device.path.len == 0) {
                     return error.MissingBlockDevicePath;
                 }
 
-                break :blk .{ .BlockDevice = .{
+                break :blk .{ .block = .{
                     .path = config.block_device.path,
-                    .async = undefined,
                 } };
             },
-            .net => @panic("todo"),
+            .net => return error.UnsupportedSnapshotDevice,
         };
 
-        var dev = try VirtioMmioDevice.from_snapshot(state, init, vm, alloc, io);
+        var dev = try VirtioMmioDevice.from_snapshot(state, params, vm, alloc, io);
         errdefer dev.deinit(alloc, io);
 
         try self.register_device(vm, dev);

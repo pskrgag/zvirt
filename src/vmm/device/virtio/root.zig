@@ -41,6 +41,11 @@ pub const VirtioDeviceInit = union(VirtioDeviceType) {
     },
 };
 
+pub const RestoreParams = union(enum) {
+    block: struct { path: []const u8 },
+    net: struct { iface: []const u8 },
+};
+
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 
 pub const MAX_QUEUES_SUPPORTED = 2048;
@@ -79,7 +84,7 @@ const VirtQueueState = struct {
         queue: ?VirtQueue.State,
     };
 
-    pub fn snapshot(self: *Self) State {
+    pub fn snapshot(self: *const Self) State {
         return .{
             .desc_ring = self.desc_ring,
             .available_ring = self.available_ring,
@@ -179,7 +184,7 @@ pub const VirtioCore = struct {
         queues: usize,
     };
 
-    pub fn snapshot(self: *Self) State {
+    pub fn snapshot(self: *const Self) State {
         var virt_queues: [MAX_QUEUES_SUPPORTED]VirtQueueState.State = undefined;
 
         for (0..MAX_QUEUES_SUPPORTED) |i| {

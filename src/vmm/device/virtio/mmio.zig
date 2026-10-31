@@ -6,6 +6,7 @@ const Net = @import("net.zig").Net;
 const virtio = @import("root.zig");
 const VirtioCore = virtio.VirtioCore;
 const VirtioDeviceInit = virtio.VirtioDeviceInit;
+const RestoreParams = virtio.RestoreParams;
 const MAX_QUEUES_SUPPORTED = virtio.MAX_QUEUES_SUPPORTED;
 const MAX_QUEUE_ELEMENTS = @import("queue.zig").MAX_QUEUE_ELEMENTS;
 const Vm = @import("../../root.zig").Vm;
@@ -312,20 +313,23 @@ pub const VirtioMmioDevice = union(enum) {
         };
     }
 
-    // TODO: need to make a type coherence between state and init
     pub fn from_snapshot(
         state: *const State,
-        init: VirtioDeviceInit,
+        params: RestoreParams,
         vm: *Vm,
         alloc: std.mem.Allocator,
         io: std.Io,
     ) !Self {
         return switch (state.*) {
             .block => |*block_state| blk: {
-                const config = switch (init) {
-                    .BlockDevice => |config| config,
-                    else => @panic("This must not happen"),
+                const config = switch (params) {
+                    .block => |config| config,
+                    else => return error.SnapshotDeviceMismatch,
                 };
+
+                if (block_state.device_state.async) {
+                    @panic("todo");
+                }
 
                 var device = try Block.from_snapshot(
                     &block_state.device_state,
@@ -342,7 +346,7 @@ pub const VirtioMmioDevice = union(enum) {
                 dev.* = try VirtioMmio(Block).from_snapshot(block_state, device, vm);
                 break :blk .{ .block = dev };
             },
-            .net => @panic("todo"),
+            .net => return error.UnsupportedSnapshotDevice,
         };
     }
 

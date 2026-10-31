@@ -41,13 +41,18 @@ const Com = struct {
 
 pub const State = struct {
     uart: [MAX_COMS]?device.uart_16550.Uart.State = @splat(null),
-    pci: bool = false,
+    pci: ?PciBus.State = null,
+    address_port: u32 = 0,
 
     pub fn deinit(self: *State, alloc: std.mem.Allocator) void {
         for (&self.uart) |*entry| {
             if (entry.*) |*uart| {
                 uart.deinit(alloc);
             }
+        }
+
+        if (self.pci) |*p| {
+            p.deinit(alloc);
         }
     }
 };
@@ -65,7 +70,10 @@ debug_cb: ?struct {
 } = null,
 
 pub fn snapshot(self: *Self, alloc: std.mem.Allocator, io: std.Io) !State {
-    var res = State{ .pci = self.pci_bus_obj != null };
+    var res = State{
+        .pci = if (self.pci_bus_obj) |p| (try p.snapshot(alloc)) else null,
+        .address_port = @bitCast(self.address_port.load(.monotonic)),
+    };
     errdefer res.deinit(alloc);
 
     for (&self.com, 0..) |*port, i| {
@@ -152,10 +160,17 @@ pub fn new(pci_range: ?MemorySlot, alloc: std.mem.Allocator) !Self {
 }
 
 pub fn from_snapshot(state: *const State, alloc: std.mem.Allocator, io: std.Io) !Self {
-    std.debug.assert(state.pci == false);
     _ = io;
+    var bus: ?*PciBus = null;
+    var self = Self{};
 
-    return Self.new(null, alloc);
+    if (state.pci) |*p| {
+        bus = try PciBus.from_snapshot(p, alloc);
+    }
+
+    self.pci_bus_obj = bus;
+    self.address_port = .init(@bitCast(state.address_port));
+    return self;
 }
 
 pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {

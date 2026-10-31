@@ -8,6 +8,7 @@ const Vm = @import("../../root.zig").Vm;
 const VirtioMmioDevice = @import("../../device/virtio/mmio.zig").VirtioMmioDevice;
 const VirtioPciDevice = @import("../../device/virtio/pci.zig").VirtioPciDevice;
 const PciDevice = @import("../../device/pci/root.zig").PciDevice;
+const RestoreParams = @import("../../device/virtio/root.zig").RestoreParams;
 const layout = @import("layout.zig");
 const IrqAllocator = @import("vm.zig").IrqAllocator;
 const EventSource = @import("../../root.zig").EventSource;
@@ -109,6 +110,39 @@ pub fn restore_devices(
     io: std.Io,
 ) !void {
     try self.mmio_bus.restore_devices(&state.mmio, config, vm, alloc, io);
+
+    if (state.io.pci) |*saved_bus| {
+        const bus = self.io_bus.pci_bus() orelse return error.InvalidSnapshot;
+
+        for (saved_bus.devices.list.items, 0..) |*entry, slot| {
+            const params: ?RestoreParams = switch (entry.*) {
+                .Brigde => null,
+                .Virtio => |*device| switch (device.*) {
+                    .block => blk: {
+                        if (config.block_device.path.len == 0) {
+                            return error.MissingBlockDevicePath;
+                        }
+                        break :blk .{ .block = .{ .path = config.block_device.path } };
+                    },
+                    .net => return error.UnsupportedSnapshotDevice,
+                },
+            };
+
+            const dev = try PciDevice.from_snapshot(entry, params, bus, vm, alloc, io);
+            const stored = bus.attach(dev, slot) catch |err| {
+                var owned = dev;
+                owned.deinit(alloc, io);
+                return err;
+            };
+
+            for (0..stored.num_bars()) |i| {
+                if (stored.bar_mmio(i)) |bar| {
+                    try self.mmio_bus.register_range(bar.base, bar.size, "Restored PCI BAR", bar.dev);
+                }
+            }
+            try stored.register_events(vm, @intCast(slot));
+        }
+    }
 }
 
 pub fn new(pci_range: ?layout.MemorySlot, alloc: std.mem.Allocator, io: std.Io) !Self {
