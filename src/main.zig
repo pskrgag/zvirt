@@ -22,7 +22,7 @@ fn log_fn(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    if (@intFromEnum(level) > @intFromEnum(runtime_log_level)) return;
+    if (@backingInt(level) > @backingInt(runtime_log_level)) return;
     std.log.defaultLog(level, scope, format, args);
 }
 

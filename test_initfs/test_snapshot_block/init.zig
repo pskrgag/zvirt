@@ -39,8 +39,8 @@ pub fn main(init: std.process.Init) !void {
     termios.lflag.ECHO = false;
     termios.iflag.ICRNL = false;
     termios.oflag.OPOST = false;
-    termios.cc[@intFromEnum(linux.V.MIN)] = 1;
-    termios.cc[@intFromEnum(linux.V.TIME)] = 0;
+    termios.cc[@backingInt(linux.V.MIN)] = 1;
+    termios.cc[@backingInt(linux.V.TIME)] = 0;
     try posix.tcsetattr(console.handle, .NOW, termios);
 
     const disk = try open("/dev/vda");

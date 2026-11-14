@@ -12,9 +12,7 @@ const EventSources = @import("event_source.zig").EventSources;
 const Vm = @import("../../root.zig").Vm;
 const GuestMemory = @import("../../memory.zig").GuestMemory;
 
-pub const c = @cImport({
-    @cInclude("linux/virtio_blk.h");
-});
+pub const c = @import("linux_abi");
 
 const VIRTIO_BLK_F_RO: u32 = 1 << 5;
 const VIRTIO_BLK_F_MQ: u32 = 1 << 12;

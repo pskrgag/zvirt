@@ -1,8 +1,6 @@
 //! bzImage parser
 
-pub const c = @cImport({
-    @cInclude("asm/bootparam.h");
-});
+pub const c = @import("linux_abi");
 
 const VmConfig = @import("../root.zig").VmConfig;
 const arch = @import("../arch/root.zig");
@@ -19,18 +17,18 @@ pub const SetupHeader = c.setup_header;
 pub const BootParams = c.boot_params;
 
 comptime {
-    std.debug.assert(@bitSizeOf(SetupHeader) == SETUP_HEADER_SIZE * 8);
-    std.debug.assert(@bitOffsetOf(SetupHeader, "boot_flag") / 8 == 0x0D);
-    std.debug.assert(@bitOffsetOf(SetupHeader, "header") / 8 == 0x11);
-    std.debug.assert(@bitOffsetOf(SetupHeader, "version") / 8 == 0x15);
-    std.debug.assert(@bitOffsetOf(SetupHeader, "kernel_info_offset") / 8 == 0x77);
+    std.debug.assert(@sizeOf(SetupHeader) == SETUP_HEADER_SIZE);
+    std.debug.assert(@offsetOf(SetupHeader, "boot_flag") == 0x0D);
+    std.debug.assert(@offsetOf(SetupHeader, "header") == 0x11);
+    std.debug.assert(@offsetOf(SetupHeader, "version") == 0x15);
+    std.debug.assert(@offsetOf(SetupHeader, "kernel_info_offset") == 0x77);
 }
 
 const BOOTFLAG = 0xAA55;
 const MAGIC = 0x53726448;
 const SUPPORTED_VERSION = 0x20f;
 
-const MINIMAL_SIZE = SETUP_HEADER_OFFSET + @bitSizeOf(SetupHeader) / 8;
+const MINIMAL_SIZE = SETUP_HEADER_OFFSET + @sizeOf(SetupHeader);
 
 fn fill_e820(params: *BootParams, config: *const VmConfig) void {
     const layout = arch.layout.memory_layout(config.ram_size);
@@ -38,7 +36,7 @@ fn fill_e820(params: *BootParams, config: *const VmConfig) void {
     for (layout.layout, 0..) |entry, i| {
         params.e820_table[i].addr = entry.start;
         params.e820_table[i].size = entry.length;
-        params.e820_table[i].type = @intFromEnum(entry.kind);
+        params.e820_table[i].type = @backingInt(entry.kind);
     }
 
     params.e820_entries = @intCast(layout.layout.len);
@@ -59,7 +57,7 @@ pub fn parse(
     if (header.header != MAGIC)
         return error.InvalidHeader;
 
-    if (@as(usize, (header.jump >> 8) + 0x11) < @bitSizeOf(SetupHeader) / 8)
+    if (@as(usize, (header.jump >> 8) + 0x11) < @sizeOf(SetupHeader))
         return error.InvalidHeaderSize;
 
     if (header.version != SUPPORTED_VERSION)

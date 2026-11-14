@@ -9,7 +9,7 @@ pub const StatKind = enum(usize) {
 
 // TODO: make it per-thread to reduce contention.
 pub const Statistics = struct {
-    counters: [@typeInfo(StatKind).@"enum".fields.len]u64 = @splat(0),
+    counters: [@typeInfo(StatKind).@"enum".field_names.len]u64 = @splat(0),
 
     const Self = @This();
 
@@ -18,18 +18,18 @@ pub const Statistics = struct {
     }
 
     pub fn read(self: *const Self, comptime stat: StatKind) u64 {
-        return @atomicLoad(u64, &self.counters[@intFromEnum(stat)], .monotonic);
+        return @atomicLoad(u64, &self.counters[@backingInt(stat)], .monotonic);
     }
 
     pub fn inc(self: *Self, comptime stat: StatKind) void {
-        _ = @atomicRmw(u64, &self.counters[@intFromEnum(stat)], .Add, 1, .monotonic);
+        _ = @atomicRmw(u64, &self.counters[@backingInt(stat)], .Add, 1, .monotonic);
     }
 
     pub fn dec(self: *Self, comptime stat: StatKind) void {
-        _ = @atomicRmw(u64, &self.counters[@intFromEnum(stat)], .Sub, 1, .monotonic);
+        _ = @atomicRmw(u64, &self.counters[@backingInt(stat)], .Sub, 1, .monotonic);
     }
 
     pub fn add(self: *Self, comptime stat: StatKind, n: u64) void {
-        _ = @atomicRmw(u64, &self.counters[@intFromEnum(stat)], .Add, n, .monotonic);
+        _ = @atomicRmw(u64, &self.counters[@backingInt(stat)], .Add, n, .monotonic);
     }
 };

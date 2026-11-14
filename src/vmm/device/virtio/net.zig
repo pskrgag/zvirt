@@ -14,10 +14,7 @@ const PciClass = @import("../pci/config.zig").PciClass;
 
 const log = std.log.scoped(.virtio_net);
 
-pub const c = @cImport({
-    @cInclude("linux/virtio_net.h");
-    @cInclude("linux/virtio_ring.h");
-});
+pub const c = @import("linux_abi");
 
 const TxChain = struct {
     buffer: [32]posix.iovec,

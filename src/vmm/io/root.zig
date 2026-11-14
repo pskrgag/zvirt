@@ -20,10 +20,10 @@ fn token_to_u64(token: anytype) u64 {
             else => @compileError("optional I/O tokens must be pointers"),
         },
         .int => |i| if (i.bits <= 64)
-            @as(std.meta.Int(.unsigned, i.bits), @bitCast(token))
+            @as(@Int(.unsigned, i.bits), @bitCast(token))
         else
             @compileError("I/O integer tokens must fit in 64 bits"),
-        .@"enum" => token_to_u64(@intFromEnum(token)),
+        .@"enum" => token_to_u64(@backingInt(token)),
         .bool => @intFromBool(token),
         else => @compileError("I/O tokens must be pointers, integers, enums or bools"),
     };
@@ -40,10 +40,10 @@ fn token_from_u64(comptime T: type, value: u64) T {
             else => @compileError("optional I/O tokens must be pointers"),
         },
         .int => |i| if (i.bits <= 64)
-            @bitCast(@as(std.meta.Int(.unsigned, i.bits), @intCast(value)))
+            @bitCast(@as(@Int(.unsigned, i.bits), @intCast(value)))
         else
             @compileError("I/O integer tokens must fit in 64 bits"),
-        .@"enum" => |e| @enumFromInt(token_from_u64(e.tag_type, value)),
+        .@"enum" => |e| @fromBackingInt(@intCast(token_from_u64(e.tag_type, value))),
         .bool => value != 0,
         else => @compileError("I/O tokens must be pointers, integers, enums or bools"),
     };

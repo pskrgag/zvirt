@@ -18,11 +18,27 @@ pub fn build(b: *std.Build) void {
         "Run only tests whose names contain any of these strings",
     ) orelse &.{};
     const cli = b.dependency("cli", .{});
+    const utils_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/utils/linux.h"),
+        .target = target,
+        .optimize = optimize,
+    }).createModule();
+    const kvm_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/kvm/linux.h"),
+        .target = target,
+        .optimize = optimize,
+    }).createModule();
+    const vmm_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/vmm/linux.h"),
+        .target = target,
+        .optimize = optimize,
+    }).createModule();
 
     const utils = b.addModule("utils", .{
         .root_source_file = b.path("src/utils/root.zig"),
         .target = target,
         .link_libc = true,
+        .imports = &.{.{ .name = "linux_abi", .module = utils_c }},
     });
 
     const test_utils = b.addModule("test_utils", .{
@@ -35,6 +51,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .link_libc = true,
         .imports = &.{
+            .{ .name = "linux_abi", .module = kvm_c },
             .{ .name = "test_utils", .module = test_utils },
             .{ .name = "utils", .module = utils },
         },
@@ -44,6 +61,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/vmm/root.zig"),
         .target = target,
         .imports = &.{
+            .{ .name = "linux_abi", .module = vmm_c },
             .{ .name = "kvm", .module = kvm },
             .{ .name = "utils", .module = utils },
             .{ .name = "test_utils", .module = test_utils },
@@ -138,15 +156,14 @@ pub fn build(b: *std.Build) void {
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     // Keep sanitizer settings separate from the executable's module graph.
     const test_utils_mod = b.createModule(.{
         .root_source_file = b.path("src/utils/root.zig"),
         .target = target,
         .sanitize_thread = tsan,
+        .imports = &.{.{ .name = "linux_abi", .module = utils_c }},
     });
     const test_helpers_mod = b.createModule(.{
         .root_source_file = b.path("src/test_utils/root.zig"),
@@ -159,6 +176,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .sanitize_thread = tsan,
         .imports = &.{
+            .{ .name = "linux_abi", .module = kvm_c },
             .{ .name = "test_utils", .module = test_helpers_mod },
             .{ .name = "utils", .module = test_utils_mod },
         },
@@ -168,6 +186,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .sanitize_thread = tsan,
         .imports = &.{
+            .{ .name = "linux_abi", .module = vmm_c },
             .{ .name = "kvm", .module = test_kvm_mod },
             .{ .name = "utils", .module = test_utils_mod },
             .{ .name = "test_utils", .module = test_helpers_mod },

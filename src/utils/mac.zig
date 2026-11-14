@@ -39,7 +39,7 @@ test "Parsing " {
     {
         const mac = try Mac.from_str("11:11:11:11:11:11");
 
-        try std.testing.expectEqualSlices(u8, &mac.mac, &[_]u8{0x11} ** 6);
+        try std.testing.expectEqualSlices(u8, &mac.mac, &@as([6]u8, @splat(0x11)));
     }
 
     {

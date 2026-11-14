@@ -23,8 +23,8 @@ fn setup_terminal(fd: posix.fd_t) !posix.termios {
     raw.lflag.ISIG = false;
 
     // A read may return as soon as one byte is available.
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+    raw.cc[@backingInt(posix.V.MIN)] = 1;
+    raw.cc[@backingInt(posix.V.TIME)] = 0;
 
     try posix.tcsetattr(fd, .NOW, raw);
 

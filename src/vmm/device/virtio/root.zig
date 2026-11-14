@@ -10,10 +10,7 @@ const Mutex = std.Io.Mutex;
 const EventFd = @import("utils").EventFd.EventFd;
 const Mac = @import("utils").Mac;
 const queue = @import("queue.zig");
-pub const c = @cImport({
-    @cInclude("linux/virtio_ring.h");
-    @cInclude("linux/virtio_config.h");
-});
+pub const c = @import("linux_abi");
 
 const log = std.log.scoped(.virtio);
 
@@ -388,9 +385,9 @@ pub const VirtioCore = struct {
 
     pub fn update_status(self: *Self, bit: StatusBits, set: bool) void {
         if (set) {
-            self.status |= @intFromEnum(bit);
+            self.status |= @backingInt(bit);
         } else {
-            self.status &= ~@intFromEnum(bit);
+            self.status &= ~@backingInt(bit);
         }
     }
 

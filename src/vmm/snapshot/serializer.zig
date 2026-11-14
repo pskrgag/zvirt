@@ -10,7 +10,7 @@ fn is_pod_type(T: type) bool {
 
     return switch (type_info) {
         .int, .bool, .float => true,
-        .@"struct" => blk: {
+        .@"struct" => |info| blk: {
             var res = true;
 
             // Special serializer means unusual type
@@ -18,8 +18,8 @@ fn is_pod_type(T: type) bool {
                 break :blk false;
             }
 
-            inline for (std.meta.fields(T)) |field| {
-                res &= is_pod_type(field.type);
+            inline for (info.field_types) |field_type| {
+                res &= is_pod_type(field_type);
             }
 
             break :blk res;
@@ -47,15 +47,15 @@ pub fn serialize(T: type, val: T, writer: *Writer) !void {
                 try serialize(info.child, value, writer);
             }
         },
-        .@"struct" => {
+        .@"struct" => |info| {
             if (@hasDecl(T, "serialize")) {
                 return try val.serialize(writer);
             }
 
-            inline for (std.meta.fields(T)) |field| {
-                const field_value = @field(val, field.name);
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                const field_value = @field(val, field_name);
 
-                try serialize(field.type, field_value, writer);
+                try serialize(field_type, field_value, writer);
             }
         },
         .pointer => |info| {
@@ -96,7 +96,7 @@ pub fn serialize(T: type, val: T, writer: *Writer) !void {
             }
         },
         .@"enum" => |info| {
-            try serialize(info.tag_type, @intFromEnum(val), writer);
+            try serialize(info.tag_type, @backingInt(val), writer);
         },
         else => {
             @compileLog("{}\n", .{@typeName(T)});
@@ -124,13 +124,13 @@ pub fn deserialize(T: type, reader: *Reader, alloc: std.mem.Allocator) !T {
                 res = null;
             }
         },
-        .@"struct" => {
+        .@"struct" => |info| {
             if (@hasDecl(T, "deserialize")) {
                 return try T.deserialize(reader, alloc);
             }
 
-            inline for (std.meta.fields(T)) |field| {
-                @field(res, field.name) = try deserialize(field.type, reader, alloc);
+            inline for (info.field_names, info.field_types) |field_name, field_type| {
+                @field(res, field_name) = try deserialize(field_type, reader, alloc);
             }
         },
         .pointer => |info| {

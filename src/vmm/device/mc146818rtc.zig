@@ -42,7 +42,7 @@ const StatusC = packed struct(u8) {
 };
 
 pub const Rtc = struct {
-    regs: [10]u8 = [_]u8{0} ** 10,
+    regs: [10]u8 = @splat(0),
     statusa: StatusA = .{},
     statusb: StatusB = .{},
     statusc: StatusC = .{},
@@ -50,8 +50,8 @@ pub const Rtc = struct {
     const Self = @This();
 
     pub fn write_reg(self: *Self, reg: Register, data: u8) void {
-        if (@intFromEnum(reg) <= @intFromEnum(Register.Year)) {
-            self.regs[@intFromEnum(reg)] = data;
+        if (@backingInt(reg) <= @backingInt(Register.Year)) {
+            self.regs[@backingInt(reg)] = data;
         }
 
         if (reg == .StatusA) {
@@ -68,8 +68,8 @@ pub const Rtc = struct {
     }
 
     pub fn read_reg(self: *Self, reg: Register) u8 {
-        if (@intFromEnum(reg) <= @intFromEnum(Register.Year)) {
-            return self.regs[@intFromEnum(reg)];
+        if (@backingInt(reg) <= @backingInt(Register.Year)) {
+            return self.regs[@backingInt(reg)];
         }
 
         if (reg == .StatusA) {

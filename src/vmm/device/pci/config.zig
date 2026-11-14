@@ -79,7 +79,7 @@ pub const PciConfigSpace = struct {
         self.write(u16, TYPE0_DEVICE_OFFSET, device_id) catch @panic("");
         self.set_write_write_mask(u16, 0, TYPE0_DEVICE_OFFSET);
 
-        self.write(u8, TYPE0_CLASS_OFFSET, @intFromEnum(class)) catch @panic("");
+        self.write(u8, TYPE0_CLASS_OFFSET, @backingInt(class)) catch @panic("");
         self.set_write_write_mask(u8, 0, TYPE0_CLASS_OFFSET);
 
         self.write(u8, TYPE0_SUBCLASS_OFFSET, subclass) catch @panic("");

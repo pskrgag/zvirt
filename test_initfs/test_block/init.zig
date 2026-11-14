@@ -36,8 +36,8 @@ fn enable_raw_mode(fd: posix.fd_t) !void {
     termios.cflag.CSIZE = .CS8;
     termios.cflag.PARENB = false;
 
-    termios.cc[@intFromEnum(linux.V.MIN)] = 1;
-    termios.cc[@intFromEnum(linux.V.TIME)] = 0;
+    termios.cc[@backingInt(linux.V.MIN)] = 1;
+    termios.cc[@backingInt(linux.V.TIME)] = 0;
 
     try posix.tcsetattr(fd, .NOW, termios);
 }

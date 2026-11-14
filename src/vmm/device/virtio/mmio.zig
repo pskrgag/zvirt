@@ -247,7 +247,7 @@ pub fn VirtioMmio(comptime Device: type) type {
 
                 try vm.register_ioevent(
                     notifyfd,
-                    self.base + @intFromEnum(MmioRegister.QueueNotify),
+                    self.base + @backingInt(MmioRegister.QueueNotify),
                     @sizeOf(u32),
                     queue_idx,
                 );

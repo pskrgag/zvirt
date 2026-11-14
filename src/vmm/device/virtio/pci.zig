@@ -12,9 +12,7 @@ const BarAllocator = @import("../pci/bar.zig").BarAllocator;
 const Block = @import("block.zig").Block;
 const Net = @import("net.zig").Net;
 const Vm = @import("../../root.zig").Vm;
-pub const c = @cImport({
-    @cInclude("linux/virtio_pci.h");
-});
+pub const c = @import("linux_abi");
 const BarMmio = @import("../pci/root.zig").BarMmio;
 const PciDeviceCore = @import("../pci/root.zig").PciDeviceCore;
 const PciBus = @import("../pci/root.zig").PciBus;
@@ -27,9 +25,10 @@ const VENDOR_ID = 0x1AF4;
 fn check_cfg_access(offset: usize, size: usize) !void {
     const T = c.virtio_pci_common_cfg;
 
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (offset == @offsetOf(T, field.name) and
-            size == @sizeOf(field.type))
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types) |field_name, field_type| {
+        if (offset == @offsetOf(T, field_name) and
+            size == @sizeOf(field_type))
         {
             return;
         }
@@ -433,8 +432,9 @@ pub const VirtioPciDevice = union(enum) {
                     .block => |config| config,
                     else => return error.SnapshotDeviceMismatch,
                 };
+
                 if (block_state.device_state.async) {
-                    return error.UnsupportedAsyncSnapshot;
+                    @panic("todo");
                 }
 
                 var device = try Block.from_snapshot(

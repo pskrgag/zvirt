@@ -123,7 +123,7 @@ pub const VmAction = enum(u32) {
 };
 
 pub const Vm = struct {
-    vcpus: [MAX_VCPUS]?*VCpu = .{null} ** MAX_VCPUS,
+    vcpus: [MAX_VCPUS]?*VCpu = @splat(null),
     vcpus_count: usize = 0,
     io: std.Io,
     worker: *io_worker.IoWorker,
@@ -332,8 +332,7 @@ pub const Vm = struct {
         if (self.dump_stat) {
             log.info("VMM Statistics:", .{});
 
-            inline for (std.meta.fields(stat.StatKind)) |field| {
-                const value: stat.StatKind = @enumFromInt(field.value);
+            inline for (std.enums.values(stat.StatKind)) |value| {
                 const name = @tagName(value);
 
                 log.info("{s}: {d}", .{ name, self.statistics.read(value) });
@@ -525,7 +524,7 @@ pub const Vm = struct {
             _ = linux.futex(
                 &self.action,
                 .{ .private = true, .cmd = .WAIT },
-                @intFromEnum(VmAction.None),
+                @backingInt(VmAction.None),
                 .{ .timeout = null },
                 null,
                 0,

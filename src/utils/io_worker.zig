@@ -48,7 +48,7 @@ pub const IoWorker = struct {
             };
 
             for (events) |event| {
-                const token: EpollToken = @bitCast(event.data);
+                const token: EpollToken = @bitCast(event.data.u64);
 
                 if (self.stop_flag.load(.monotonic) or token.fd == self.shutdown_event.fd) {
                     return;

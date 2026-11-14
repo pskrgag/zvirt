@@ -6,12 +6,7 @@ const linux = std.os.linux;
 
 const log = std.log.scoped(.tap);
 
-pub const c = @cImport({
-    @cInclude("linux/ioctl.h");
-    @cInclude("linux/if.h");
-    @cInclude("linux/if_tun.h");
-    @cInclude("fcntl.h");
-});
+pub const c = @import("linux_abi");
 
 pub const Tap = struct {
     fd: posix.fd_t,

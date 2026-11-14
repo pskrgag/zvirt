@@ -1,4 +1,4 @@
-//! Line-oriented CI runner for Zig 0.16. Local runs retain Zig's default runner.
+//! Line-oriented CI runner. Local runs retain Zig's default runner.
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
@@ -15,7 +15,7 @@ pub fn main(init: std.process.Init.Minimal) void {
 
     for (builtin.test_functions, 0..) |test_fn, i| {
         std.debug.print("START {d}/{d} {s}\n", .{ i + 1, builtin.test_functions.len, test_fn.name });
-        testing.allocator_instance = .{};
+        testing.allocator_instance = .init(std.heap.page_allocator, .{});
         testing.io_instance = .init(testing.allocator, .{
             .argv0 = .init(init.args),
             .environ = init.environ,
@@ -38,7 +38,7 @@ pub fn main(init: std.process.Init.Minimal) void {
         };
 
         testing.io_instance.deinit();
-        if (testing.allocator_instance.deinit() == .leak) {
+        if (testing.allocator_instance.deinit() != 0) {
             leaks += 1;
             result = .fail;
         }
@@ -74,7 +74,7 @@ pub fn log(comptime level: std.log.Level, comptime scope: @EnumLiteral(), compti
     if (level == .err) {
         _ = logged_errors.fetchAdd(1, .monotonic);
     }
-    if (@intFromEnum(level) <= @intFromEnum(testing.log_level)) {
+    if (@backingInt(level) <= @backingInt(testing.log_level)) {
         std.debug.print("[" ++ @tagName(scope) ++ "] (" ++ @tagName(level) ++ "): " ++ format ++ "\n", args);
     }
 }
