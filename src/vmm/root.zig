@@ -12,7 +12,7 @@ const Epoll = utils.Epoll.Epoll;
 const EpollEvent = utils.Epoll.Event;
 const linux = std.os.linux;
 const EventFd = utils.EventFd.EventFd;
-const stat = @import("stat.zig");
+const stat = @import("stat/root.zig");
 const Statistics = stat.Statistics;
 const io_worker = utils.IoWorker;
 const Snapshot = @import("snapshot/root.zig").Snapshot;
@@ -332,7 +332,7 @@ pub const Vm = struct {
         if (self.dump_stat) {
             log.info("VMM Statistics:", .{});
 
-            inline for (std.enums.values(stat.StatKind)) |value| {
+            inline for (std.enums.values(stat.Statistics.StatKind)) |value| {
                 const name = @tagName(value);
 
                 log.info("{s}: {d}", .{ name, self.statistics.read(value) });

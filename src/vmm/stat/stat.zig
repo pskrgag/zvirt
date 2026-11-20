@@ -2,14 +2,14 @@
 
 const std = @import("std");
 
-pub const StatKind = enum(usize) {
-    vmexit_io,
-    vmexit_mmio,
-};
-
 // TODO: make it per-thread to reduce contention.
 pub const Statistics = struct {
     counters: [@typeInfo(StatKind).@"enum".field_names.len]u64 = @splat(0),
+
+    pub const StatKind = enum(usize) {
+        vmexit_io,
+        vmexit_mmio,
+    };
 
     const Self = @This();
 
