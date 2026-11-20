@@ -782,7 +782,7 @@ const tcp_test_server =
     \\with socket.socket() as server:
     \\    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     \\    server.settimeout(10)
-    \\    server.bind(("192.0.2.1", 12345))
+    \\    server.bind(("192.168.100.1", 12345))
     \\    server.listen()
     \\    print("tcp-ready", flush=True)
     \\    conn, _ = server.accept()
@@ -850,17 +850,17 @@ fn test_virtio_net(smp: u8, pci: bool) !void {
     try consoles.wait_for(TEST_MAC);
 
     // Setup the device
-    try consoles.write("ip addr add 192.0.2.2/24 dev eth0 && echo 'ok'\n");
+    try consoles.write("ip addr add 192.168.100.2/24 dev eth0 && echo 'ok'\n");
     try consoles.wait_for("ok");
 
     try consoles.write("ip link set eth0 up && echo 'ok1'\n");
     try consoles.wait_for("ok1");
 
     // Test ARP
-    try test_utils.run_program(io, &.{ "arping", "-I", TEST_IFACE, "-c", "3", "192.0.2.2" });
+    try test_utils.run_program(io, &.{ "arping", "-I", TEST_IFACE, "-c", "3", "192.168.100.2" });
 
     // Test ICMP
-    try test_utils.run_program(io, &.{ "ping", "192.0.2.2", "-c", "10" });
+    try test_utils.run_program(io, &.{ "ping", "192.168.100.2", "-c", "10" });
 
     // Exchange raw text in both directions over one TCP connection.
     var host_output = try test_utils.TmpUartOutput.create();
@@ -875,7 +875,7 @@ fn test_virtio_net(smp: u8, pci: bool) !void {
     defer server.kill(io);
 
     try wait_for_output(&host_output, "tcp-ready");
-    try consoles.write("printf 'hello from guest' | socat - TCP4:192.0.2.1:12345\n");
+    try consoles.write("printf 'hello from guest' | socat - TCP4:192.168.100.1:12345\n");
     try wait_for_output(&host_output, "hello from guest");
     try consoles.wait_for("hello from host");
 

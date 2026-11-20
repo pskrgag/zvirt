@@ -10,7 +10,14 @@ const log = std.log.scoped(.chardev);
 // TODO: do we even need support for other type of streams? I doubt it
 
 fn setup_terminal(fd: posix.fd_t) !posix.termios {
-    const original = try posix.tcgetattr(fd);
+    var original: std.os.linux.termios = undefined;
+
+    const res = std.os.linux.tcgetattr(fd, &original);
+    switch (std.os.linux.errno(res)) {
+        .SUCCESS => {},
+        else => return error.Tcgetattr,
+    }
+
     var raw = original;
 
     // Deliver input without waiting for a newline.

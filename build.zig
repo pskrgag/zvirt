@@ -39,11 +39,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .link_libc = true,
         .imports = &.{.{ .name = "linux_abi", .module = utils_c }},
+        .optimize = optimize,
     });
 
     const test_utils = b.addModule("test_utils", .{
         .root_source_file = b.path("src/test_utils/root.zig"),
         .target = target,
+        .optimize = optimize,
     });
 
     const kvm = b.addModule("kvm", .{
@@ -55,6 +57,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "test_utils", .module = test_utils },
             .{ .name = "utils", .module = utils },
         },
+        .optimize = optimize,
     });
 
     const vmm = b.addModule("vmm", .{
@@ -66,6 +69,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "utils", .module = utils },
             .{ .name = "test_utils", .module = test_utils },
         },
+        .optimize = optimize,
     });
 
     const mod = b.addModule("zvirt", .{
@@ -74,6 +78,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "vmm", .module = vmm },
         },
+        .optimize = optimize,
     });
 
     // Here we define an executable. An executable needs to have a root module
@@ -164,11 +169,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .sanitize_thread = tsan,
         .imports = &.{.{ .name = "linux_abi", .module = utils_c }},
+        .optimize = optimize,
     });
     const test_helpers_mod = b.createModule(.{
         .root_source_file = b.path("src/test_utils/root.zig"),
         .target = target,
         .sanitize_thread = tsan,
+        .optimize = optimize,
     });
     const test_kvm_mod = b.createModule(.{
         .root_source_file = b.path("src/kvm/root.zig"),
@@ -180,6 +187,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "test_utils", .module = test_helpers_mod },
             .{ .name = "utils", .module = test_utils_mod },
         },
+        .optimize = optimize,
     });
     const test_vmm_mod = b.createModule(.{
         .root_source_file = b.path("src/vmm/root.zig"),
@@ -197,6 +205,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .sanitize_thread = tsan,
         .imports = &.{.{ .name = "vmm", .module = test_vmm_mod }},
+        .optimize = optimize,
     });
     const test_main_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
