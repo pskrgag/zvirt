@@ -11,6 +11,7 @@ const NotifyResult = @import("root.zig").NotifyResult;
 const EventSources = @import("event_source.zig").EventSources;
 const Vm = @import("../../root.zig").Vm;
 const GuestMemory = @import("../../memory.zig").GuestMemory;
+const LatencyStat = @import("../../stat/root.zig").LatencyStat;
 
 pub const c = @import("linux_abi");
 
@@ -55,6 +56,7 @@ pub const Block = struct {
     file: std.Io.File,
     engine: FileEngine,
     core: VirtioCore,
+    notify_latency: LatencyStat,
 
     pub const MMIO_TYPE = 0x2;
 
@@ -188,6 +190,9 @@ pub const Block = struct {
     }
 
     pub fn handle_notify(self: *Self, queue_idx: u19, vm: *Vm, io: std.Io) !NotifyResult {
+        const latency = self.notify_latency.track();
+        defer latency.deinit();
+
         const token = try self.core.notified_queue(queue_idx, io);
         defer self.core.unlock_queue(token, io);
 
