@@ -13,6 +13,7 @@ const Vm = @import("../../root.zig").Vm;
 const GuestMemory = @import("../../memory.zig").GuestMemory;
 const LatencyStat = @import("../../stat/root.zig").LatencyStat;
 const Device = @import("../root.zig").Device;
+const Requests = @import("queue.zig").Requests;
 
 pub const c = @import("linux_abi");
 
@@ -119,7 +120,7 @@ pub const Block = struct {
             .config = config,
             .file = file,
             .engine = engine,
-            .core = try VirtioCore.new(Self.features(), queues, alloc),
+            .core = try VirtioCore.new(Self.features(), queues),
             .dev = .{ .name = name, .context = self, .read_latency = read_latency },
         };
         return self;
@@ -163,7 +164,7 @@ pub const Block = struct {
             .config = snap.config,
             .file = file,
             .engine = engine,
-            .core = try VirtioCore.from_snapshot(&snap.core, memory, alloc),
+            .core = try VirtioCore.from_snapshot(&snap.core, memory),
             .dev = .{ .name = name, .context = self, .read_latency = read_latency },
         };
         return self;
@@ -222,26 +223,25 @@ pub const Block = struct {
         const token = try self.core.notified_queue(queue_idx, io);
         defer self.core.unlock_queue(token, io);
 
-        var reqs = try token.queue.kick(
-            vm.archvm.memory,
-            token.alloc.allocator(),
-        );
+        // NOTE: fix zig fucking insanity. Even tho Requests request is said to be undefined
+        // zig emits fucking memset.
+        var reqs: Requests = undefined;
+        reqs.count = 0;
 
-        defer _ = token.alloc.reset(.retain_capacity);
-        defer reqs.deinit(token.alloc.allocator());
+        try token.queue.kick(vm.archvm.memory, &reqs);
 
         {
             var iolatency = self.io_latency.track();
             defer iolatency.deinit(io);
 
-            self.proccess_requests(reqs.items, io) catch {
+            self.proccess_requests(reqs.get_requests(), io) catch {
                 @panic("todo");
             };
         }
 
         var notify = false;
 
-        for (reqs.items) |req| {
+        for (reqs.get_requests()) |req| {
             // Len == 0 means that request will be handled in async
             if (req.len != 0) {
                 notify |= token.queue.push_used(

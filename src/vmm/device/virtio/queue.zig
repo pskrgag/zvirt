@@ -110,6 +110,25 @@ pub const RequestChain = struct {
     }
 };
 
+pub const Requests = struct {
+    requests: [MAX_QUEUE_ELEMENTS]RequestChain = undefined,
+    count: usize = 0,
+
+    fn alloc_chain(self: *Requests) *RequestChain {
+        if (self.count == self.requests.len)
+            @panic("Too many requests");
+
+        const res = &self.requests[self.count];
+        self.count += 1;
+
+        return res;
+    }
+
+    pub fn get_requests(self: *Requests) []RequestChain {
+        return self.requests[0..self.count];
+    }
+};
+
 pub const MAX_QUEUE_ELEMENTS = 256;
 
 pub const VirtQueue = struct {
@@ -266,26 +285,28 @@ pub const VirtQueue = struct {
         head: u16,
         mem: *GuestMemory,
         dring: []Descriptor,
-    ) ?RequestChain {
+        chain: *RequestChain,
+    ) void {
         var remaining = self.descr_ring_ptr.len;
         var descriptor_idx = head;
-        var chain = RequestChain{ .head = head };
+
+        // NOTE: fix zig fucking insanity. Even tho RequestChain request is said to be undefined
+        // zig emits fucking memset.
+        chain.count = 0;
+        chain.len = 0;
+        chain.head = head;
 
         while (true) {
             if (descriptor_idx >= self.descr_ring_ptr.len)
-                return null;
+                return;
 
             if (remaining == 0)
-                return null;
+                return;
 
             remaining -= 1;
 
             const descriptor = dring[descriptor_idx];
-
-            const slice = mem.as_slice(
-                descriptor.address,
-                descriptor.length,
-            ) orelse return null;
+            const slice = mem.as_slice(descriptor.address, descriptor.length) orelse return;
 
             const req = if (descriptor.flags & DESC_F_WRITE == 0)
                 Request{ .ReadOnly = slice }
@@ -299,16 +320,13 @@ pub const VirtQueue = struct {
 
             descriptor_idx = descriptor.next;
         }
-
-        return chain;
     }
 
     fn queue_elements(self: *const Self) usize {
         return self.descr_ring_ptr.len;
     }
 
-    pub fn kick(self: *Self, mem: *GuestMemory, alloc: std.mem.Allocator) !std.ArrayList(RequestChain) {
-        var res = try std.ArrayList(RequestChain).initCapacity(alloc, 16);
+    pub fn kick(self: *Self, mem: *GuestMemory, reqs: *Requests) !void {
         const slots = self.avail_ring_ptr.slots(self.queue_elements());
 
         while (true) {
@@ -318,11 +336,12 @@ pub const VirtQueue = struct {
 
                 self.last_avail_idx +%= 1;
 
-                try res.append(alloc, self.process_descriptor_chain(
+                self.process_descriptor_chain(
                     descriptor_head,
                     mem,
                     self.descr_ring_ptr,
-                ).?);
+                    reqs.alloc_chain(),
+                );
             }
 
             self.used_ring_ptr.set_avail_event(self.queue_elements(), self.last_avail_idx);
@@ -330,8 +349,6 @@ pub const VirtQueue = struct {
             if (self.avail_ring_ptr.idx.load(.monotonic) == self.last_avail_idx)
                 break;
         }
-
-        return res;
     }
 };
 
@@ -369,13 +386,15 @@ test "kick returns a descriptor chain in descriptor order" {
     available.slots(queue.descr_ring_ptr.len)[0] = 0;
     available.idx.store(1, .release);
 
-    var chains = try queue.kick(mem, alloc);
-    defer chains.deinit(alloc);
+    var chains: Requests = undefined;
+    chains.count = 0;
+    try queue.kick(mem, &chains);
+    const chain_items = chains.get_requests();
 
-    try std.testing.expectEqual(@as(usize, 1), chains.items.len);
-    try std.testing.expectEqual(@as(u16, 0), chains.items[0].head);
+    try std.testing.expectEqual(@as(usize, 1), chain_items.len);
+    try std.testing.expectEqual(@as(u16, 0), chain_items[0].head);
 
-    const requests = chains.items[0].get_requests();
+    const requests = chain_items[0].get_requests();
     try std.testing.expectEqual(@as(usize, 3), requests.len);
     try std.testing.expectEqual(@as(usize, 16), requests[0].len());
     try std.testing.expect(requests[0].as_rw() == null);
@@ -405,16 +424,19 @@ test "kick consumes each available entry once" {
     available.slots(queue.descr_ring_ptr.len)[1] = 1;
     available.idx.store(2, .release);
 
-    var first = try queue.kick(mem, alloc);
-    defer first.deinit(alloc);
-    try std.testing.expectEqual(@as(usize, 2), first.items.len);
-    try std.testing.expectEqual(@as(u16, 0), first.items[0].head);
-    try std.testing.expectEqual(@as(u16, 1), first.items[1].head);
+    var first: Requests = undefined;
+    first.count = 0;
+    try queue.kick(mem, &first);
+    const first_chains = first.get_requests();
+    try std.testing.expectEqual(@as(usize, 2), first_chains.len);
+    try std.testing.expectEqual(@as(u16, 0), first_chains[0].head);
+    try std.testing.expectEqual(@as(u16, 1), first_chains[1].head);
     try std.testing.expectEqual(@as(usize, 2), queue.last_avail_idx);
 
-    var second = try queue.kick(mem, alloc);
-    defer second.deinit(alloc);
-    try std.testing.expectEqual(@as(usize, 0), second.items.len);
+    var second: Requests = undefined;
+    second.count = 0;
+    try queue.kick(mem, &second);
+    try std.testing.expectEqual(@as(usize, 0), second.get_requests().len);
 }
 
 test "push_used publishes used elements and advances idx" {

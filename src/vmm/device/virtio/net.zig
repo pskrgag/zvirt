@@ -13,6 +13,7 @@ const posix = std.posix;
 const PciClass = @import("../pci/config.zig").PciClass;
 const Device = @import("../root.zig").Device;
 const LatencyStat = @import("../../stat/root.zig").LatencyStat;
+const Requests = @import("queue.zig").Requests;
 
 const log = std.log.scoped(.virtio_net);
 
@@ -154,7 +155,7 @@ pub const Net = struct {
         self.* = .{
             .config = config,
             .taps = taps,
-            .core = try VirtioCore.new(Self.features(), Self.max_queues_ex(queue_pairs), alloc),
+            .core = try VirtioCore.new(Self.features(), Self.max_queues_ex(queue_pairs)),
             .queue_pairs = queue_pairs,
             .dev = .{ .name = name, .context = self, .read_latency = read_latency },
         };
@@ -204,17 +205,16 @@ pub const Net = struct {
     }
 
     fn proccess_rx_queue(self: *Self, pair: usize, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
-        var reqs = try token.queue.kick(
-            vm.archvm.memory,
-            token.alloc.allocator(),
-        );
+        // NOTE: fix zig fucking insanity. Even tho Requests request is said to be undefined
+        // zig emits fucking memset.
+        var reqs: Requests = undefined;
+        reqs.count = 0;
+
+        try token.queue.kick(vm.archvm.memory, &reqs);
 
         const tap = &self.taps[pair];
 
-        defer _ = token.alloc.reset(.retain_capacity);
-        defer reqs.deinit(token.alloc.allocator());
-
-        for (reqs.items) |ch| {
+        for (reqs.get_requests()) |ch| {
             const rqs = ch.get_requests();
             var chain = TxChain{
                 .buffer = undefined,
@@ -238,17 +238,17 @@ pub const Net = struct {
     }
 
     fn proccess_tx_queue(self: *Self, pair: usize, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
-        var reqs = try token.queue.kick(
-            vm.archvm.memory,
-            token.alloc.allocator(),
-        );
+        // NOTE: fix zig fucking insanity. Even tho Requests request is said to be undefined
+        // zig emits fucking memset.
+        var reqs: Requests = undefined;
+        reqs.count = 0;
+
+        try token.queue.kick(vm.archvm.memory, &reqs);
+
         var notify = false;
         const tap = &self.taps[pair];
 
-        defer _ = token.alloc.reset(.retain_capacity);
-        defer reqs.deinit(token.alloc.allocator());
-
-        for (reqs.items) |ch| {
+        for (reqs.get_requests()) |ch| {
             const rqs = ch.get_requests();
             var buffers: [32]posix.iovec_const = undefined;
 
@@ -308,13 +308,12 @@ pub const Net = struct {
     }
 
     fn proccess_control_queue(self: *Self, vm: *Vm, token: *VirtQueueToken) !NotifyResult {
-        const reqs = try token.queue.kick(
-            vm.archvm.memory,
-            token.alloc.allocator(),
-        );
+        var reqs = Requests{};
+        try token.queue.kick(vm.archvm.memory, &reqs);
+
         var notify = false;
 
-        for (reqs.items) |ch| {
+        for (reqs.get_requests()) |ch| {
             const rqs = ch.get_requests();
 
             // NOTE: spec allows header to be spread across different descriptors. But hey, I don't

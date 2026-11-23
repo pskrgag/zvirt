@@ -210,6 +210,7 @@ pub const Server = struct {
             worker.join();
 
         self.server.deinit(io);
+        self.epoll.deinit();
         self.eventfd.deinit();
     }
 };

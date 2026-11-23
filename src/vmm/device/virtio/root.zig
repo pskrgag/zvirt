@@ -68,7 +68,6 @@ const VirtQueueState = struct {
     used_ring: u64 = std.math.maxInt(u64),
     elements: u32 = queue.MAX_QUEUE_ELEMENTS,
 
-    alloc: std.heap.ArenaAllocator,
     notifyfd: EventFd,
 
     const Self = @This();
@@ -94,13 +93,11 @@ const VirtQueueState = struct {
     pub fn from_snapshot(
         snap: *const State,
         memory: *GuestMemory,
-        allocator: std.mem.Allocator,
     ) !Self {
         var notifyfd = try EventFd.new(0);
         errdefer notifyfd.deinit();
 
         return .{
-            .alloc = std.heap.ArenaAllocator.init(allocator),
             .notifyfd = notifyfd,
             .desc_ring = snap.desc_ring,
             .available_ring = snap.available_ring,
@@ -128,7 +125,6 @@ pub const NotifyResult = struct {
 
 pub const VirtQueueToken = struct {
     queue: *VirtQueue,
-    alloc: *std.heap.ArenaAllocator,
 
     idx: usize,
 };
@@ -145,15 +141,11 @@ pub const VirtioCore = struct {
     pub fn new(
         features: u64,
         queues: usize,
-        alloc: std.mem.Allocator,
     ) !Self {
         if (queues > MAX_QUEUES_SUPPORTED)
             return error.TooManyQueues;
 
-        var state: [MAX_QUEUES_SUPPORTED]VirtQueueState = @splat(.{
-            .alloc = std.heap.ArenaAllocator.init(alloc),
-            .notifyfd = undefined,
-        });
+        var state: [MAX_QUEUES_SUPPORTED]VirtQueueState = @splat(.{ .notifyfd = undefined });
 
         var notifyfd_count: usize = 0;
 
@@ -200,23 +192,18 @@ pub const VirtioCore = struct {
     pub fn from_snapshot(
         snap: *const State,
         memory: *GuestMemory,
-        allocator: std.mem.Allocator,
     ) !Self {
         if (snap.queues > MAX_QUEUES_SUPPORTED) {
             return error.TooManyQueues;
         }
 
-        var state: [MAX_QUEUES_SUPPORTED]VirtQueueState = @splat(.{
-            .alloc = std.heap.ArenaAllocator.init(allocator),
-            .notifyfd = undefined,
-        });
+        var state: [MAX_QUEUES_SUPPORTED]VirtQueueState = @splat(.{ .notifyfd = undefined });
 
         var restored: usize = 0;
 
         errdefer {
             for (state[0..restored]) |*s| {
                 s.notifyfd.deinit();
-                s.alloc.deinit();
             }
         }
 
@@ -224,7 +211,6 @@ pub const VirtioCore = struct {
             state[restored] = try VirtQueueState.from_snapshot(
                 &snap.virt_queues[restored],
                 memory,
-                allocator,
             );
         }
 
@@ -402,7 +388,7 @@ pub const VirtioCore = struct {
         errdefer state.lock.unlock(io);
 
         if (state.queue) |*live_queue| {
-            return .{ .queue = live_queue, .alloc = &state.alloc, .idx = idx };
+            return .{ .queue = live_queue, .idx = idx };
         }
 
         return error.QueueNotReady;
@@ -428,10 +414,6 @@ pub const VirtioCore = struct {
     pub fn deinit(self: *Self) void {
         for (self.virt_queues[0..self.max_queues()]) |*s| {
             s.notifyfd.deinit();
-        }
-
-        for (self.virt_queues) |state| {
-            state.alloc.deinit();
         }
     }
 };
