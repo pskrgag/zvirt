@@ -17,6 +17,7 @@ const Snapshot = @import("../../snapshot/root.zig").Snapshot;
 const MmioAlloc = @import("../../device/mmio_alloc.zig").MmioAlloc;
 const kvm_system = &@import("../../root.zig").kvm_system;
 const memory = @import("../../memory.zig");
+const Device = @import("../../device/root.zig").Device;
 
 pub const ArchVcpuState = @import("vcpu.zig").ArchVcpuState;
 pub const snapshot_cpu = @import("vcpu.zig").snapshot_cpu;
@@ -147,6 +148,10 @@ pub const ArchVm = struct {
             .irqs = idalloc,
             .mmio_alloc = MmioAlloc.new(mem_layout.mmio_space()),
         };
+    }
+
+    pub fn lookup_device(self: *Self, name: []const u8) ?*Device {
+        return self.device_bus.lookup_device(name);
     }
 
     pub fn from_snapshot(

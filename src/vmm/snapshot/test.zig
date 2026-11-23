@@ -3,7 +3,7 @@
 const std = @import("std");
 const test_utils = @import("test_utils");
 const Vm = @import("../root.zig").Vm;
-const VmSnapshotState = @import("../vm_snapshot.zig").VmSnapshotState;
+const VmSnapshotState = @import("vm_snapshot.zig").VmSnapshotState;
 const Snapshot = @import("root.zig").Snapshot(VmSnapshotState);
 
 const Checkpoint = struct {

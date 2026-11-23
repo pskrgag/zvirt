@@ -240,6 +240,7 @@ pub const PciDevice = union(enum) {
     };
 
     pub fn from_snapshot(
+        name: []const u8,
         state: *const State,
         params: ?RestoreParams,
         bus: *PciBus,
@@ -250,6 +251,7 @@ pub const PciDevice = union(enum) {
         return switch (state.*) {
             .Brigde => |*b| .{ .Brigde = try PciBridge.from_snapshot(b, bus, vm) },
             .Virtio => |*v| .{ .Virtio = try VirtioPciDevice.from_snapshot(
+                name,
                 v,
                 params orelse return error.MissingRestoreParams,
                 bus,

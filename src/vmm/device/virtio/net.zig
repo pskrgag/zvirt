@@ -11,6 +11,8 @@ const Vm = @import("../../root.zig").Vm;
 const VirtQueueToken = @import("root.zig").VirtQueueToken;
 const posix = std.posix;
 const PciClass = @import("../pci/config.zig").PciClass;
+const Device = @import("../root.zig").Device;
+const LatencyStat = @import("../../stat/root.zig").LatencyStat;
 
 const log = std.log.scoped(.virtio_net);
 
@@ -86,6 +88,7 @@ pub const Net = struct {
     taps: [MAX_QUEUE_PAIRS]TapContext,
     core: VirtioCore,
     queue_pairs: usize,
+    dev: Device,
 
     pub const MMIO_TYPE = 0x1;
     pub const PCI_DEVICE_ID = 0x1041;
@@ -93,6 +96,10 @@ pub const Net = struct {
     pub const PCI_CLASS: PciClass = .Nic;
 
     const Self = @This();
+
+    fn read_latency(_: *anyopaque, _: []const u8, _: std.Io) !LatencyStat.Latency {
+        return error.UnsupportedLatency;
+    }
 
     pub const State = struct {};
 
@@ -118,7 +125,10 @@ pub const Net = struct {
         return Self.max_queues_ex(self.queue_pairs);
     }
 
-    pub fn new(mac: Mac, iface: []const u8, queue_pairs: usize, alloc: std.mem.Allocator) !Self {
+    pub fn new(name: []const u8, mac: Mac, iface: []const u8, queue_pairs: usize, alloc: std.mem.Allocator) !*Self {
+        const self = try alloc.create(Self);
+        errdefer alloc.destroy(self);
+
         var taps: [MAX_QUEUE_PAIRS]TapContext = undefined;
         var opened_pairs: usize = 0;
 
@@ -141,12 +151,14 @@ pub const Net = struct {
         config.mac = mac.mac;
         config.max_virtqueue_pairs = @intCast(queue_pairs);
 
-        return .{
+        self.* = .{
             .config = config,
             .taps = taps,
             .core = try VirtioCore.new(Self.features(), Self.max_queues_ex(queue_pairs), alloc),
             .queue_pairs = queue_pairs,
+            .dev = .{ .name = name, .context = self, .read_latency = read_latency },
         };
+        return self;
     }
 
     pub fn snapshot(self: *const Self) !State {
@@ -372,5 +384,6 @@ pub const Net = struct {
         for (0..self.queue_pairs) |i| {
             self.taps[i].deinit(alloc);
         }
+        alloc.destroy(self);
     }
 };

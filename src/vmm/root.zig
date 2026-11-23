@@ -16,8 +16,10 @@ const stat = @import("stat/root.zig");
 const Statistics = stat.Statistics;
 const io_worker = utils.IoWorker;
 const Snapshot = @import("snapshot/root.zig").Snapshot;
-const VmSnapshotState = @import("vm_snapshot.zig").VmSnapshotState;
+const VmSnapshotState = @import("snapshot/vm_snapshot.zig").VmSnapshotState;
 const mmap = test_utils.mmap;
+const Server = @import("server.zig").Server;
+const Device = @import("device/root.zig").Device;
 
 pub const VmSnapshot = Snapshot(VmSnapshotState);
 
@@ -134,6 +136,7 @@ pub const Vm = struct {
     action: std.atomic.Value(VmAction) = .init(.None),
     dump_stat: bool = false,
     stop_event: std.Io.Event = .unset,
+    server: Server,
 
     const Self = @This();
 
@@ -274,6 +277,7 @@ pub const Vm = struct {
             ),
             .old_sigaction = old,
             .archvm = undefined,
+            .server = try Server.new(self, "/tmp/zvirt_socket", io),
         };
 
         return self;
@@ -320,7 +324,15 @@ pub const Vm = struct {
         try self.archvm.vm.register_ioevent(eventfd, address, len, datamatch);
     }
 
+    pub fn lookup_device(self: *Self, name: []const u8) ?*Device {
+        return self.archvm.lookup_device(name);
+    }
+
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
+        self.server.deinit(io) catch {
+            log.err("Failed to stop server\n", .{});
+        };
+
         // Destroy worker before VCPU
         self.worker.deinit(alloc, io);
 
@@ -560,7 +572,6 @@ pub const Vm = struct {
 
 test {
     _ = @import("image/root.zig");
-    _ = @import("io/root.zig");
     _ = @import("test.zig");
     _ = @import("snapshot/test.zig");
 }

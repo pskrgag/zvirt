@@ -216,7 +216,7 @@ pub fn restore_devices(
             .net => return error.UnsupportedSnapshotDevice,
         };
 
-        var dev = try VirtioMmioDevice.from_snapshot(state, params, vm, alloc, io);
+        var dev = try VirtioMmioDevice.from_snapshot("block0", state, params, vm, alloc, io);
         errdefer dev.deinit(alloc, io);
 
         try self.register_device(vm, dev);

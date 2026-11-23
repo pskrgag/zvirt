@@ -1,10 +1,10 @@
 //! VM snapshot state
 
 const std = @import("std");
-const SerializableList = @import("snapshot/vector.zig").SerializableList;
-const VCpuState = @import("vcpu.zig").VCpuState;
-const MAX_VCPUS = @import("root.zig").MAX_VCPUS;
-const ArchVmState = @import("root.zig").arch.ArchVm.ArchVmState;
+const SerializableList = @import("vector.zig").SerializableList;
+const VCpuState = @import("../vcpu.zig").VCpuState;
+const MAX_VCPUS = @import("../root.zig").MAX_VCPUS;
+const ArchVmState = @import("../root.zig").arch.ArchVm.ArchVmState;
 
 pub const MemoryEntry = struct {
     start: u64,

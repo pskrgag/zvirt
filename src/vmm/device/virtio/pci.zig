@@ -39,7 +39,7 @@ fn check_cfg_access(offset: usize, size: usize) !void {
 
 fn VirtioPci(comptime Device: type) type {
     return struct {
-        device: Device,
+        device: *Device,
         pci: *PciDeviceCore,
         allocator: std.mem.Allocator,
         state_lock: std.Io.Mutex = .init,
@@ -87,7 +87,7 @@ fn VirtioPci(comptime Device: type) type {
 
         pub fn from_snapshot(
             state: *const State,
-            device: Device,
+            device: *Device,
             bus: *PciBus,
             vm: *Vm,
             alloc: std.mem.Allocator,
@@ -123,7 +123,7 @@ fn VirtioPci(comptime Device: type) type {
             return self;
         }
 
-        pub fn new(device: Device, bus: *PciBus, vm: *Vm, alloc: std.mem.Allocator) !*Self {
+        pub fn new(device: *Device, bus: *PciBus, vm: *Vm, alloc: std.mem.Allocator) !*Self {
             const self = try alloc.create(Self);
             errdefer alloc.destroy(self);
 
@@ -419,6 +419,7 @@ pub const VirtioPciDevice = union(enum) {
     }
 
     pub fn from_snapshot(
+        name: []const u8,
         state: *const State,
         params: RestoreParams,
         bus: *PciBus,
@@ -438,6 +439,7 @@ pub const VirtioPciDevice = union(enum) {
                 }
 
                 var device = try Block.from_snapshot(
+                    name,
                     &block_state.device_state,
                     config.path,
                     vm.archvm.memory,
@@ -459,6 +461,7 @@ pub const VirtioPciDevice = union(enum) {
     }
 
     pub fn new(
+        name: []const u8,
         kind: VirtioDeviceInit,
         bus: *PciBus,
         vm: *Vm,
@@ -472,13 +475,13 @@ pub const VirtioPciDevice = union(enum) {
                 else
                     vm.cpu_count();
 
-                var device = try Block.new(block.path, num_queues, block.async, alloc, io);
+                var device = try Block.new(name, block.path, num_queues, block.async, alloc, io);
                 errdefer device.deinit(alloc, io);
 
                 break :blk .{ .block = try VirtioPci(Block).new(device, bus, vm, alloc) };
             },
             .NetDevice => |net| blk: {
-                var device = try Net.new(net.mac, net.iface, 4, alloc);
+                var device = try Net.new(name, net.mac, net.iface, 4, alloc);
                 errdefer device.deinit(alloc, io);
 
                 break :blk .{ .net = try VirtioPci(Net).new(device, bus, vm, alloc) };

@@ -49,7 +49,7 @@ pub fn VirtioMmio(comptime Device: type) type {
         // Assuming page size
         base: u64,
         irq: u32,
-        device: Device,
+        device: *Device,
         device_sel: bool = false,
         driver_sel: bool = false,
         queue_sel: u32 = 0,
@@ -77,7 +77,7 @@ pub fn VirtioMmio(comptime Device: type) type {
                 0;
         }
 
-        pub fn new(base: u64, device: Device, vm: *Vm, irq: u32) !Self {
+        pub fn new(base: u64, device: *Device, vm: *Vm, irq: u32) !Self {
             // TODO: replace all 4096 with arch page size
             std.debug.assert(std.mem.isAligned(base, 4096));
 
@@ -107,7 +107,7 @@ pub fn VirtioMmio(comptime Device: type) type {
             };
         }
 
-        pub fn from_snapshot(state: *const State, device: Device, vm: *Vm) !Self {
+        pub fn from_snapshot(state: *const State, device: *Device, vm: *Vm) !Self {
             var irqfd = try EventFd.new(0);
             errdefer irqfd.deinit();
 
@@ -314,6 +314,7 @@ pub const VirtioMmioDevice = union(enum) {
     }
 
     pub fn from_snapshot(
+        device_name: []const u8,
         state: *const State,
         params: RestoreParams,
         vm: *Vm,
@@ -332,6 +333,7 @@ pub const VirtioMmioDevice = union(enum) {
                 }
 
                 var device = try Block.from_snapshot(
+                    device_name,
                     &block_state.device_state,
                     config.path,
                     vm.archvm.memory,
@@ -351,6 +353,7 @@ pub const VirtioMmioDevice = union(enum) {
     }
 
     pub fn new(
+        device_name: []const u8,
         base_address: u64,
         kind: VirtioDeviceInit,
         vm: *Vm,
@@ -365,7 +368,7 @@ pub const VirtioMmioDevice = union(enum) {
                 else
                     vm.cpu_count();
 
-                var device = try Block.new(block.path, num_queues, block.async, alloc, io);
+                var device = try Block.new(device_name, block.path, num_queues, block.async, alloc, io);
                 errdefer device.deinit(alloc, io);
 
                 const transport = try alloc.create(VirtioMmio(Block));
@@ -380,7 +383,7 @@ pub const VirtioMmioDevice = union(enum) {
                 break :blk .{ .block = transport };
             },
             .NetDevice => |net| blk: {
-                var device = try Net.new(net.mac, net.iface, 4, alloc);
+                var device = try Net.new(device_name, net.mac, net.iface, 4, alloc);
                 errdefer device.deinit(alloc, io);
 
                 const transport = try alloc.create(VirtioMmio(Net));

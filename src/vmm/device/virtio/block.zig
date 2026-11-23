@@ -3,7 +3,7 @@
 const std = @import("std");
 const queue = @import("queue.zig");
 const log = std.log.scoped(.virtio_blk);
-const FileEngine = @import("../../io/root.zig").FileEngine;
+const FileEngine = @import("utils").FileEngine.FileEngine;
 const IdAllocator = @import("utils").IdAlloc.IdAllocator;
 const PciClass = @import("../pci/config.zig").PciClass;
 const VirtioCore = @import("root.zig").VirtioCore;
@@ -12,6 +12,7 @@ const EventSources = @import("event_source.zig").EventSources;
 const Vm = @import("../../root.zig").Vm;
 const GuestMemory = @import("../../memory.zig").GuestMemory;
 const LatencyStat = @import("../../stat/root.zig").LatencyStat;
+const Device = @import("../root.zig").Device;
 
 pub const c = @import("linux_abi");
 
@@ -56,7 +57,9 @@ pub const Block = struct {
     file: std.Io.File,
     engine: FileEngine,
     core: VirtioCore,
-    notify_latency: LatencyStat,
+    notify_latency: LatencyStat = .{},
+    io_latency: LatencyStat = .{},
+    dev: Device,
 
     pub const MMIO_TYPE = 0x2;
 
@@ -66,6 +69,18 @@ pub const Block = struct {
 
     const Self = @This();
 
+    fn read_latency(context: *anyopaque, name: []const u8, io: std.Io) !LatencyStat.Latency {
+        const self: *Self = @ptrCast(@alignCast(context));
+
+        if (std.mem.eql(u8, name, "notify"))
+            return self.notify_latency.read(io);
+
+        if (std.mem.eql(u8, name, "io"))
+            return self.io_latency.read(io);
+
+        return error.InvalidLatency;
+    }
+
     pub const State = struct {
         config: c.virtio_blk_config,
         core: VirtioCore.State,
@@ -73,12 +88,16 @@ pub const Block = struct {
     };
 
     pub fn new(
+        name: []const u8,
         path: []const u8,
         num_queues: usize,
         async: bool,
         alloc: std.mem.Allocator,
         io: std.Io,
-    ) !Self {
+    ) !*Self {
+        const self = try alloc.create(Self);
+        errdefer alloc.destroy(self);
+
         var config = std.mem.zeroes(c.virtio_blk_config);
         var engine = if (async)
             try FileEngine.new_async(MAX_IN_FLIGHT_REQUESTS)
@@ -96,12 +115,14 @@ pub const Block = struct {
         config.capacity = stat.size / 512;
         config.num_queues = @truncate(queues);
 
-        return .{
+        self.* = .{
             .config = config,
             .file = file,
             .engine = engine,
             .core = try VirtioCore.new(Self.features(), queues, alloc),
+            .dev = .{ .name = name, .context = self, .read_latency = read_latency },
         };
+        return self;
     }
 
     pub fn snapshot(self: *const Self) !State {
@@ -117,12 +138,16 @@ pub const Block = struct {
     }
 
     pub fn from_snapshot(
+        name: []const u8,
         snap: *const State,
         path: []const u8,
         memory: *GuestMemory,
         alloc: std.mem.Allocator,
         io: std.Io,
-    ) !Self {
+    ) !*Self {
+        const self = try alloc.create(Self);
+        errdefer alloc.destroy(self);
+
         var engine = if (!snap.async)
             try FileEngine.new_sync()
         else
@@ -134,12 +159,14 @@ pub const Block = struct {
         var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
         errdefer file.close(io);
 
-        return .{
+        self.* = .{
             .config = snap.config,
             .file = file,
             .engine = engine,
             .core = try VirtioCore.from_snapshot(&snap.core, memory, alloc),
+            .dev = .{ .name = name, .context = self, .read_latency = read_latency },
         };
+        return self;
     }
 
     pub fn completion_event_source(self: *const Self) ?EventSources(1) {
@@ -150,11 +177,10 @@ pub const Block = struct {
     }
 
     pub fn deinit(self: *Self, alloc: std.mem.Allocator, io: std.Io) void {
-        _ = alloc;
-
         self.core.deinit();
         self.engine.deinit();
         self.file.close(io);
+        alloc.destroy(self);
     }
 
     pub fn handle_completion_event(self: *Self, id: usize, io: std.Io) !NotifyResult {
@@ -190,8 +216,8 @@ pub const Block = struct {
     }
 
     pub fn handle_notify(self: *Self, queue_idx: u19, vm: *Vm, io: std.Io) !NotifyResult {
-        const latency = self.notify_latency.track();
-        defer latency.deinit();
+        var nlatency = self.notify_latency.track();
+        defer nlatency.deinit(io);
 
         const token = try self.core.notified_queue(queue_idx, io);
         defer self.core.unlock_queue(token, io);
@@ -204,9 +230,14 @@ pub const Block = struct {
         defer _ = token.alloc.reset(.retain_capacity);
         defer reqs.deinit(token.alloc.allocator());
 
-        self.proccess_requests(reqs.items, io) catch {
-            @panic("todo");
-        };
+        {
+            var iolatency = self.io_latency.track();
+            defer iolatency.deinit(io);
+
+            self.proccess_requests(reqs.items, io) catch {
+                @panic("todo");
+            };
+        }
 
         var notify = false;
 

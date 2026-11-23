@@ -7,6 +7,7 @@ pub const IdAlloc = @import("idalloc.zig");
 pub const Tap = @import("tap.zig").Tap;
 pub const Mac = @import("mac.zig").Mac;
 pub const IoWorker = @import("io_worker.zig");
+pub const FileEngine = @import("file_engine.zig");
 
 test {
     _ = @import("lazy.zig");

@@ -1,6 +1,7 @@
 //! Device drivers
 
 const std = @import("std");
+const LatencyStat = @import("../stat/root.zig").LatencyStat;
 
 pub const uart_16550 = @import("uart_16550.zig");
 pub const cmos = @import("cmos.zig");
@@ -11,4 +12,10 @@ pub const MmioDevice = struct {
     context: *anyopaque,
     read_fn: *const fn (*anyopaque, usize, []u8, std.Io) anyerror!void,
     write_fn: *const fn (*anyopaque, usize, []const u8, std.Io) anyerror!void,
+};
+
+pub const Device = struct {
+    name: []const u8,
+    context: *anyopaque,
+    read_latency: *const fn (*anyopaque, []const u8, std.Io) anyerror!LatencyStat.Latency,
 };

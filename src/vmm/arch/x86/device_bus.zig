@@ -13,6 +13,7 @@ const layout = @import("layout.zig");
 const IrqAllocator = @import("vm.zig").IrqAllocator;
 const EventSource = @import("../../root.zig").EventSource;
 const MmioAlloc = @import("../../device/mmio_alloc.zig").MmioAlloc;
+const Device = @import("../../device/root.zig").Device;
 
 const io_bus_struct = @import("io_bus.zig");
 const mmio_bus_struct = @import("mmio_bus.zig");
@@ -21,6 +22,34 @@ io_bus: io_bus_struct,
 mmio_bus: *mmio_bus_struct,
 
 const Self = @This();
+
+pub fn lookup_device(self: *Self, name: []const u8) ?*Device {
+    for (self.mmio_bus.virtio_devs.items) |entry| {
+        const dev = switch (entry) {
+            inline else => |transport| &transport.device.dev,
+        };
+
+        if (std.mem.eql(u8, dev.name, name))
+            return dev;
+    }
+
+    if (self.io_bus.pci_bus()) |bus| {
+        for (bus.devices) |slot| {
+            const virtio = switch (slot orelse continue) {
+                .Brigde => continue,
+                .Virtio => |dev| dev,
+            };
+            const dev = switch (virtio) {
+                inline else => |transport| &transport.device.dev,
+            };
+
+            if (std.mem.eql(u8, dev.name, name))
+                return dev;
+        }
+    }
+
+    return null;
+}
 
 pub const State = struct {
     io: io_bus_struct.State = .{},
@@ -128,7 +157,16 @@ pub fn restore_devices(
                 },
             };
 
-            const dev = try PciDevice.from_snapshot(entry, params, bus, vm, alloc, io);
+            // TODO: when more devices appear add sane ID allocator.
+            const name: []const u8 = switch (entry.*) {
+                .Brigde => "",
+                .Virtio => |device| switch (device) {
+                    .block => "block0",
+                    .net => "net0",
+                },
+            };
+
+            const dev = try PciDevice.from_snapshot(name, entry, params, bus, vm, alloc, io);
             const stored = bus.attach(dev, slot) catch |err| {
                 var owned = dev;
                 owned.deinit(alloc, io);
@@ -172,6 +210,7 @@ pub fn setup_devices(
             errdefer irq_alloc.free(irq);
 
             var dev = try VirtioMmioDevice.new(
+                "block0",
                 base,
                 .{ .BlockDevice = .{
                     .path = config.block_device.path,
@@ -187,6 +226,7 @@ pub fn setup_devices(
             try self.mmio_bus.register_device(vm, dev);
         } else {
             var dev = try VirtioPciDevice.new(
+                "block0",
                 .{ .BlockDevice = .{
                     .path = config.block_device.path,
                     .async = config.block_device.async,
@@ -219,6 +259,7 @@ pub fn setup_devices(
             errdefer irq_alloc.free(irq);
 
             var dev = try VirtioMmioDevice.new(
+                "net0",
                 base,
                 .{ .NetDevice = .{ .mac = net.mac, .iface = net.iface } },
                 vm,
@@ -231,6 +272,7 @@ pub fn setup_devices(
             try self.mmio_bus.register_device(vm, dev);
         } else {
             var dev = try VirtioPciDevice.new(
+                "net0",
                 .{ .NetDevice = .{ .mac = net.mac, .iface = net.iface } },
                 self.io_bus.pci_bus().?,
                 vm,

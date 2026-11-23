@@ -317,5 +317,6 @@ fn run() !void {
         .index = 1,
     }, snap, allocator);
 
+    try vm.server.start(io, allocator);
     try vm.run(io, allocator);
 }

@@ -3,7 +3,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 const posix = std.posix;
-const EventFd = @import("utils").EventFd.EventFd;
+const EventFd = @import("eventfd.zig").EventFd;
 
 const log = std.log.scoped(.file_engine);
 
