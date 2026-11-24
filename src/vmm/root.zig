@@ -20,6 +20,7 @@ const VmSnapshotState = @import("snapshot/vm_snapshot.zig").VmSnapshotState;
 const mmap = test_utils.mmap;
 const Server = @import("server.zig").Server;
 const Device = @import("device/root.zig").Device;
+const LatencyStat = @import("stat/root.zig").LatencyStat;
 
 pub const VmSnapshot = Snapshot(VmSnapshotState);
 
@@ -137,6 +138,7 @@ pub const Vm = struct {
     dump_stat: bool = false,
     stop_event: std.Io.Event = .unset,
     server: Server,
+    handler_latency: LatencyStat = .{},
 
     const Self = @This();
 
@@ -324,7 +326,19 @@ pub const Vm = struct {
         try self.archvm.vm.register_ioevent(eventfd, address, len, datamatch);
     }
 
-    pub fn lookup_device(self: *Self, name: []const u8) ?*Device {
+    fn read_latency(context: *anyopaque, name: []const u8, io: std.Io) !LatencyStat.Latency {
+        const self: *Self = @ptrCast(@alignCast(context));
+
+        if (std.mem.eql(u8, name, "handler"))
+            return self.handler_latency.read(io);
+
+        return error.InvalidLatency;
+    }
+
+    pub fn lookup_device(self: *Self, name: []const u8) ?Device {
+        if (std.mem.eql(u8, name, "vmm"))
+            return .{ .name = "vmm", .context = self, .read_latency = read_latency };
+
         return self.archvm.lookup_device(name);
     }
 
@@ -440,6 +454,9 @@ pub const Vm = struct {
     pub fn handler(ctx: *anyopaque, userctx: io_worker.UserContext) !void {
         const self: *Self = @ptrCast(@alignCast(ctx));
         const token: EventToken = @bitCast(userctx);
+
+        var latency = self.handler_latency.track();
+        defer latency.deinit(self.io);
 
         switch (token.source) {
             .vcpu => {

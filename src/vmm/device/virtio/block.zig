@@ -60,7 +60,8 @@ pub const Block = struct {
     core: VirtioCore,
     notify_latency: LatencyStat = .{},
     io_latency: LatencyStat = .{},
-    dev: Device,
+    push_used_latency: LatencyStat = .{},
+    name: []const u8,
 
     pub const MMIO_TYPE = 0x2;
 
@@ -70,6 +71,10 @@ pub const Block = struct {
 
     const Self = @This();
 
+    pub fn device(self: *Self) Device {
+        return .{ .name = self.name, .context = self, .read_latency = read_latency };
+    }
+
     fn read_latency(context: *anyopaque, name: []const u8, io: std.Io) !LatencyStat.Latency {
         const self: *Self = @ptrCast(@alignCast(context));
 
@@ -78,6 +83,9 @@ pub const Block = struct {
 
         if (std.mem.eql(u8, name, "io"))
             return self.io_latency.read(io);
+
+        if (std.mem.eql(u8, name, "push_used"))
+            return self.push_used_latency.read(io);
 
         return error.InvalidLatency;
     }
@@ -121,7 +129,7 @@ pub const Block = struct {
             .file = file,
             .engine = engine,
             .core = try VirtioCore.new(Self.features(), queues),
-            .dev = .{ .name = name, .context = self, .read_latency = read_latency },
+            .name = name,
         };
         return self;
     }
@@ -165,7 +173,7 @@ pub const Block = struct {
             .file = file,
             .engine = engine,
             .core = try VirtioCore.from_snapshot(&snap.core, memory),
-            .dev = .{ .name = name, .context = self, .read_latency = read_latency },
+            .name = name,
         };
         return self;
     }
@@ -241,13 +249,18 @@ pub const Block = struct {
 
         var notify = false;
 
-        for (reqs.get_requests()) |req| {
-            // Len == 0 means that request will be handled in async
-            if (req.len != 0) {
-                notify |= token.queue.push_used(
-                    req.head,
-                    req.len,
-                );
+        {
+            var ulatency = self.push_used_latency.track();
+            defer ulatency.deinit(io);
+
+            for (reqs.get_requests()) |req| {
+                // Len == 0 means that request will be handled in async
+                if (req.len != 0) {
+                    notify |= token.queue.push_used(
+                        req.head,
+                        req.len,
+                    );
+                }
             }
         }
 

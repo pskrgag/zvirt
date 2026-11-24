@@ -89,7 +89,7 @@ pub const Net = struct {
     taps: [MAX_QUEUE_PAIRS]TapContext,
     core: VirtioCore,
     queue_pairs: usize,
-    dev: Device,
+    name: []const u8,
 
     pub const MMIO_TYPE = 0x1;
     pub const PCI_DEVICE_ID = 0x1041;
@@ -97,6 +97,10 @@ pub const Net = struct {
     pub const PCI_CLASS: PciClass = .Nic;
 
     const Self = @This();
+
+    pub fn device(self: *Self) Device {
+        return .{ .name = self.name, .context = self, .read_latency = read_latency };
+    }
 
     fn read_latency(_: *anyopaque, _: []const u8, _: std.Io) !LatencyStat.Latency {
         return error.UnsupportedLatency;
@@ -157,7 +161,7 @@ pub const Net = struct {
             .taps = taps,
             .core = try VirtioCore.new(Self.features(), Self.max_queues_ex(queue_pairs)),
             .queue_pairs = queue_pairs,
-            .dev = .{ .name = name, .context = self, .read_latency = read_latency },
+            .name = name,
         };
         return self;
     }

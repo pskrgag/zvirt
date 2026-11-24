@@ -23,10 +23,10 @@ mmio_bus: *mmio_bus_struct,
 
 const Self = @This();
 
-pub fn lookup_device(self: *Self, name: []const u8) ?*Device {
+pub fn lookup_device(self: *Self, name: []const u8) ?Device {
     for (self.mmio_bus.virtio_devs.items) |entry| {
         const dev = switch (entry) {
-            inline else => |transport| &transport.device.dev,
+            inline else => |transport| transport.device.device(),
         };
 
         if (std.mem.eql(u8, dev.name, name))
@@ -40,7 +40,7 @@ pub fn lookup_device(self: *Self, name: []const u8) ?*Device {
                 .Virtio => |dev| dev,
             };
             const dev = switch (virtio) {
-                inline else => |transport| &transport.device.dev,
+                inline else => |transport| transport.device.device(),
             };
 
             if (std.mem.eql(u8, dev.name, name))

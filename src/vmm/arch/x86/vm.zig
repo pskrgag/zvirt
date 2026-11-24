@@ -150,7 +150,7 @@ pub const ArchVm = struct {
         };
     }
 
-    pub fn lookup_device(self: *Self, name: []const u8) ?*Device {
+    pub fn lookup_device(self: *Self, name: []const u8) ?Device {
         return self.device_bus.lookup_device(name);
     }
 
